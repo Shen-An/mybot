@@ -5,7 +5,10 @@ multi-agent workflow and receives the fully compiled results when
 all sub-agents have finished.
 """
 
+from __future__ import annotations
+
 import contextvars
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -19,6 +22,27 @@ from backend.modules.session.runtime_config import (
     resolve_session_runtime_config,
 )
 from backend.modules.tools.base import Tool
+
+
+class WorkflowMode(str, Enum):
+    """工作流模式枚举 — 单点定义，Schema 和运行时验证共用。"""
+    PIPELINE = "pipeline"
+    GRAPH = "graph"
+    COUNCIL = "council"
+
+    @classmethod
+    def values(cls) -> list[str]:
+        """返回所有可选值，用于生成 JSON Schema enum。"""
+        return [m.value for m in cls]
+
+    @classmethod
+    def labels(cls) -> Dict[str, str]:
+        """返回模式的中英文标签映射。"""
+        return {
+            "pipeline": "流水线",
+            "graph": "依赖图",
+            "council": "多视角",
+        }
 
 
 _event_callback_context: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
@@ -105,7 +129,7 @@ class WorkflowTool(Tool):
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["pipeline", "graph", "council"],
+                    "enum": WorkflowMode.values(),  # 从枚举生成，单点维护
                     "description": "Workflow mode.",
                 },
                 "goal": {
@@ -231,6 +255,12 @@ class WorkflowTool(Tool):
         if mode is None:
             return "Error: 'mode' must be provided when using custom agents."
 
+        # 运行时验证：用枚举确保 mode 合法
+        try:
+            mode_enum = WorkflowMode(mode)
+        except ValueError:
+            return f"无效 mode: \"{mode}\"。可选值: {WorkflowMode.values()}"
+
         engine = WorkflowEngine(
             self._manager,
             session_id=self._session_id,
@@ -240,14 +270,12 @@ class WorkflowTool(Tool):
             event_callback=_event_callback_context.get(),
         )
 
-        if mode == "pipeline":
+        if mode_enum == WorkflowMode.PIPELINE:
             return await engine.run_pipeline(goal, agents, enable_skills=enable_skills)
-        elif mode == "graph":
+        elif mode_enum == WorkflowMode.GRAPH:
             return await engine.run_graph(goal, agents, enable_skills=enable_skills)
-        elif mode == "council":
+        elif mode_enum == WorkflowMode.COUNCIL:
             return await engine.run_council(goal, agents, cross_review=cross_review, enable_skills=enable_skills)
-        else:
-            return (
-                f"Error: unknown workflow mode '{mode}'. "
-                "Valid choices are: pipeline, graph, council."
-            )
+
+        # 理论上不会到达这里（枚举已验证），保留兜底
+        return f"无效 mode: \"{mode}\"。可选值: {WorkflowMode.values()}"

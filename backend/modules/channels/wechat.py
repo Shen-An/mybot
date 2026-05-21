@@ -958,6 +958,7 @@ class WeChatChannel(BaseChannel):
         self._processed_ids: OrderedDict[str, None] = OrderedDict()
         self._config_cache: Dict[str, WeChatConfigCacheEntry] = {}
         self._typing_tasks: Dict[str, asyncio.Task] = {}
+        self._active_typing_sessions: Dict[str, str] = {}  # chat_id -> typing session_key
         self._last_runtime_note: str = ""
 
     def _mark_session_paused(self, reason: str) -> None:
@@ -1000,6 +1001,7 @@ class WeChatChannel(BaseChannel):
         self._running = False
         typing_tasks = list(self._typing_tasks.values())
         self._typing_tasks.clear()
+        self._active_typing_sessions.clear()
         for task in typing_tasks:
             task.cancel()
         if typing_tasks:
@@ -1024,6 +1026,14 @@ class WeChatChannel(BaseChannel):
         _assert_wechat_session_active(self.account_id)
 
         try:
+            # 发消息前关闭 typing，确保"对方正在输入中"在回复到达前消失
+            typing_key = self._active_typing_sessions.pop(str(msg.chat_id), None)
+            if typing_key:
+                try:
+                    await self.close_typing_session(typing_key)
+                except Exception as exc:
+                    logger.debug(f"[wechat:{self.account_id}] failed to close typing for {msg.chat_id}: {exc}")
+
             context_token = str((msg.metadata or {}).get("context_token") or "").strip()
             if not context_token:
                 context_token = self._context_tokens.get(str(msg.chat_id), "")
@@ -1390,6 +1400,19 @@ class WeChatChannel(BaseChannel):
 
         context_token = str(raw_msg.get("context_token") or "").strip()
         self._remember_context_token(sender_id, context_token)
+
+        # 立即启动 typing 提示，只要在思考就一直显示"对方正在输入中"
+        if context_token and sender_id not in self._active_typing_sessions:
+            try:
+                typing_key = await self.open_typing_session(
+                    chat_id=sender_id,
+                    context_token=context_token,
+                )
+                if typing_key:
+                    self._active_typing_sessions[sender_id] = typing_key
+                    logger.debug(f"[wechat:{self.account_id}] started typing for {sender_id}")
+            except Exception as exc:
+                logger.debug(f"[wechat:{self.account_id}] failed to start typing for {sender_id}: {exc}")
 
         item_list = raw_msg.get("item_list") or []
         if not isinstance(item_list, list):

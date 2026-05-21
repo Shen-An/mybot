@@ -5,10 +5,25 @@
 - MemoryWriteTool / MemorySearchTool / MemoryReadTool: 保留用于向后兼容
 """
 
+from __future__ import annotations
+
+from enum import Enum
 from typing import Any, Dict, Optional
 from loguru import logger
 from backend.modules.tools.base import Tool
 from backend.modules.agent.memory import MemoryStore
+
+
+class MemoryAction(str, Enum):
+    """记忆操作类型枚举 — 单点定义，Schema 和运行时验证共用。"""
+    WRITE = "write"
+    SEARCH = "search"
+    READ = "read"
+
+    @classmethod
+    def values(cls) -> list[str]:
+        """返回所有可选值，用于生成 JSON Schema enum。"""
+        return [a.value for a in cls]
 
 
 class MemoryWriteTool(Tool):
@@ -198,7 +213,7 @@ class MemoryTool(Tool):
                 "action": {
                     "type": "string",
                     "description": "Memory action.",
-                    "enum": ["write", "search", "read"],
+                    "enum": MemoryAction.values(),  # 从枚举生成，单点维护
                 },
                 "content": {
                     "type": "string",
@@ -248,7 +263,13 @@ class MemoryTool(Tool):
         recent_count: int = 10,
         **kwargs,
     ) -> str:
-        if action == "write":
+        # 运行时验证：用枚举确保 action 合法
+        try:
+            action_enum = MemoryAction(action)
+        except ValueError:
+            return f"无效 action: \"{action}\"。可选值: {MemoryAction.values()}"
+
+        if action_enum == MemoryAction.WRITE:
             if not content:
                 return "write 操作需要提供 content 参数"
             try:
@@ -260,7 +281,7 @@ class MemoryTool(Tool):
                 logger.error(f"Memory write failed: {e}")
                 return f"写入记忆失败: {e}"
 
-        elif action == "search":
+        elif action_enum == MemoryAction.SEARCH:
             if not keywords:
                 return "search 操作需要提供 keywords 参数"
             try:
@@ -272,7 +293,7 @@ class MemoryTool(Tool):
                 logger.error(f"Memory search failed: {e}")
                 return f"搜索记忆失败: {e}"
 
-        elif action == "read":
+        elif action_enum == MemoryAction.READ:
             try:
                 stats = self._memory.get_stats()
                 header = f"记忆库共 {stats['total']} 条"
@@ -287,5 +308,5 @@ class MemoryTool(Tool):
                 logger.error(f"Memory read failed: {e}")
                 return f"读取记忆失败: {e}"
 
-        else:
-            return f"未知 action: {action}。可选值: write / search / read"
+        # 理论上不会到达这里（枚举已验证），保留兜底
+        return f"未知 action: {action}"
