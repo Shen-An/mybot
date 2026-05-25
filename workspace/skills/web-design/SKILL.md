@@ -100,19 +100,19 @@ API Token 获取：[Cloudflare Dashboard](https://dash.cloudflare.com/profile/ap
 
 ```bash
 # 部署单个 HTML 文件（自动创建项目，自动作为 index.html）
-python3 skills/web-design/scripts/deploy.py deploy index.html --project my-site
+python skills/web-design/scripts/deploy.py deploy index.html --project my-site
 
 # 部署整个目录
-python3 skills/web-design/scripts/deploy.py deploy ./dist --project my-site
+python skills/web-design/scripts/deploy.py deploy ./dist --project my-site
 
 # 部署到预览分支
-python3 skills/web-design/scripts/deploy.py deploy ./dist --project my-site --branch preview
+python skills/web-design/scripts/deploy.py deploy ./dist --project my-site --branch preview
 
 # 查看项目列表
-python3 skills/web-design/scripts/deploy.py list
+python skills/web-design/scripts/deploy.py list
 
 # 查看项目部署历史
-python3 skills/web-design/scripts/deploy.py deployments --project my-site
+python skills/web-design/scripts/deploy.py deployments --project my-site
 
 ```
 
@@ -129,13 +129,13 @@ python3 skills/web-design/scripts/deploy.py deployments --project my-site
 
 ```bash
 # 八位随机前缀 + 内容名称，避免冲突
-python3 skills/web-design/scripts/deploy.py deploy 文件路径 --project a3f8k2m1-product-intro
+python skills/web-design/scripts/deploy.py deploy 文件路径 --project a3f8k2m1-product-intro
 ```
 
 用户说"更新 xxxx 网站"：
 
 ```bash
-python3 skills/web-design/scripts/deploy.py deploy 文件路径 --project prompt123
+python skills/web-design/scripts/deploy.py deploy 文件路径 --project prompt123
 ```
 
 ## 注意事项

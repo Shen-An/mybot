@@ -9,13 +9,13 @@ homepage: https://github.com/countbot-ai/CountBot
 ## 入口
 
 ```bash
-python3 skills/find-skills/scripts/skillhub_tool.py search "关键词" --json
-python3 skills/find-skills/scripts/skillhub_tool.py install <slug> --json
-python3 skills/find-skills/scripts/skillhub_tool.py list --json
-python3 skills/find-skills/scripts/skillhub_tool.py enable <slug> --json
-python3 skills/find-skills/scripts/skillhub_tool.py disable <slug> --json
-python3 skills/find-skills/scripts/skillhub_tool.py delete <slug> --json
-python3 skills/find-skills/scripts/skillhub_tool.py bootstrap --cli-only --json
+python skills/find-skills/scripts/skillhub_tool.py search "关键词" --json
+python skills/find-skills/scripts/skillhub_tool.py install <slug> --json
+python skills/find-skills/scripts/skillhub_tool.py list --json
+python skills/find-skills/scripts/skillhub_tool.py enable <slug> --json
+python skills/find-skills/scripts/skillhub_tool.py disable <slug> --json
+python skills/find-skills/scripts/skillhub_tool.py delete <slug> --json
+python skills/find-skills/scripts/skillhub_tool.py bootstrap --cli-only --json
 ```
 
 ## 命令与参数
@@ -23,7 +23,7 @@ python3 skills/find-skills/scripts/skillhub_tool.py bootstrap --cli-only --json
 ### `search`
 
 ```bash
-python3 skills/find-skills/scripts/skillhub_tool.py search "关键词" [--limit N] [--json]
+python skills/find-skills/scripts/skillhub_tool.py search "关键词" [--limit N] [--json]
 ```
 
 参数说明：
@@ -45,7 +45,7 @@ python3 skills/find-skills/scripts/skillhub_tool.py search "关键词" [--limit 
 ### `install`
 
 ```bash
-python3 skills/find-skills/scripts/skillhub_tool.py install <slug> [--force] [--json]
+python skills/find-skills/scripts/skillhub_tool.py install <slug> [--force] [--json]
 ```
 
 参数说明：
@@ -65,7 +65,7 @@ python3 skills/find-skills/scripts/skillhub_tool.py install <slug> [--force] [--
 ### `list`
 
 ```bash
-python3 skills/find-skills/scripts/skillhub_tool.py list [--json]
+python skills/find-skills/scripts/skillhub_tool.py list [--json]
 ```
 
 参数说明：
@@ -87,7 +87,7 @@ python3 skills/find-skills/scripts/skillhub_tool.py list [--json]
 ### `enable`
 
 ```bash
-python3 skills/find-skills/scripts/skillhub_tool.py enable <slug> [--json]
+python skills/find-skills/scripts/skillhub_tool.py enable <slug> [--json]
 ```
 
 参数说明：
@@ -104,7 +104,7 @@ python3 skills/find-skills/scripts/skillhub_tool.py enable <slug> [--json]
 ### `disable`
 
 ```bash
-python3 skills/find-skills/scripts/skillhub_tool.py disable <slug> [--json]
+python skills/find-skills/scripts/skillhub_tool.py disable <slug> [--json]
 ```
 
 参数说明：
@@ -121,7 +121,7 @@ python3 skills/find-skills/scripts/skillhub_tool.py disable <slug> [--json]
 ### `delete`
 
 ```bash
-python3 skills/find-skills/scripts/skillhub_tool.py delete <slug> [--json]
+python skills/find-skills/scripts/skillhub_tool.py delete <slug> [--json]
 ```
 
 参数说明：
@@ -140,7 +140,7 @@ python3 skills/find-skills/scripts/skillhub_tool.py delete <slug> [--json]
 ### `bootstrap`
 
 ```bash
-python3 skills/find-skills/scripts/skillhub_tool.py bootstrap [--cli-only | --skill-only | --plugin-only] [--no-skills | --with-skills] [--restart-gateway] [--json]
+python skills/find-skills/scripts/skillhub_tool.py bootstrap [--cli-only | --skill-only | --plugin-only] [--no-skills | --with-skills] [--restart-gateway] [--json]
 ```
 
 参数说明：

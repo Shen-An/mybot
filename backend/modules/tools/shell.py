@@ -189,31 +189,35 @@ class ExecTool(Tool):
         metadata = context.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
 
-        # 设置运行时 python 环境变量，确保执行 "python xxx" 命令时默认在运行时环境执行
+        # 设置运行时 python 环境变量，确保执行 "python xxx" 命令时默认在 CountBot 环境执行
         # 获取当前运行的 python.exe 绝对路径及其所在目录
         python_exe = Path(sys.executable).resolve()
         python_dir = python_exe.parent
-        
-        # 初始 PATH 列表：首先包含 python.exe 所在的目录
-        new_path_entries = [str(python_dir)]
-        
-        # 针对 Windows 的特殊处理
-        if os.name == 'nt':
-            # 情况 A: 如果 python.exe 在根目录（如 Conda），则需要添加 Scripts 子目录
-            # 情况 B: 如果 python.exe 已经在 Scripts 目录（如 venv），则无需重复添加
-            if python_dir.name.lower() != "scripts":
-                scripts_dir = python_dir / "Scripts"
+
+        # 优先检测 CountBot conda 环境
+        countbot_python = self._resolve_countbot_python()
+        if countbot_python:
+            countbot_dir = countbot_python.parent
+            new_path_entries = [str(countbot_dir)]
+            if os.name == 'nt':
+                scripts_dir = countbot_dir / "Scripts"
                 if scripts_dir.exists():
-                    new_path_entries.insert(0, str(scripts_dir))
+                    new_path_entries.append(str(scripts_dir))
         else:
-            # Unix-like 系统 (Linux/macOS): 
-            # Python 和脚本通常都在 bin 目录下，python_dir 已经覆盖了
-            pass
+            # 回退：使用当前 python.exe 所在目录
+            new_path_entries = [str(python_dir)]
+            if os.name == 'nt':
+                if python_dir.name.lower() != "scripts":
+                    scripts_dir = python_dir / "Scripts"
+                    if scripts_dir.exists():
+                        new_path_entries.insert(0, str(scripts_dir))
+            else:
+                pass
 
         # 获取系统现有的 PATH
         path_key = "PATH" if "PATH" in env else "Path"
         current_path = env.get(path_key, "")
-        
+
         # 合并路径：新探测的路径置于最前面
         new_path_entries.append(current_path)
         env[path_key] = os.pathsep.join(filter(None, new_path_entries))
@@ -242,6 +246,82 @@ class ExecTool(Tool):
                 ensure_ascii=False,
             )
         return env
+
+    _countbot_python_cache: Optional[Path] = None
+    _countbot_python_tried: bool = False
+
+    @staticmethod
+    def _resolve_countbot_python() -> Optional[Path]:
+        """检测 CountBot conda 环境中的 python.exe 路径。
+        如果环境不存在，自动运行 setup_env.py 创建。
+        结果会缓存，同次对话不重复检测/创建。
+
+        Returns:
+            Path | None: CountBot Python 路径，未找到则返回 None
+        """
+        if ExecTool._countbot_python_tried:
+            return ExecTool._countbot_python_cache
+
+        ExecTool._countbot_python_tried = True
+        env_name = "CountBot"
+
+        def _find_python() -> Optional[Path]:
+            try:
+                r = subprocess.run(
+                    "conda env list",
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                for line in r.stdout.splitlines():
+                    if env_name in line and "envs" in line:
+                        parts = line.strip().split()
+                        if parts:
+                            env_dir = Path(parts[-1])
+                            python = env_dir / "python.exe"
+                            if python.exists():
+                                return python
+            except Exception:
+                pass
+            return None
+
+        # 第一次检测
+        python_path = _find_python()
+        if python_path:
+            logger.info(f"检测到 CountBot Python: {python_path}")
+            ExecTool._countbot_python_cache = python_path
+            return python_path
+
+        # CountBot 环境不存在，自动运行 setup_env.py 创建
+        logger.info("CountBot 环境不存在，自动创建...")
+        try:
+            project_root = Path(__file__).resolve().parent.parent.parent.parent
+            setup_script = project_root / "workspace" / "skills" / "countbot-env" / "scripts" / "setup_env.py"
+            if setup_script.exists():
+                r = subprocess.run(
+                    f'python "{setup_script}"',
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+                logger.info(f"setup_env.py 输出: {r.stdout.strip()[-200:]}")
+                if r.returncode != 0:
+                    logger.warning(f"setup_env.py 执行失败: {r.stderr.strip()[-200:]}")
+        except Exception as e:
+            logger.warning(f"运行 setup_env.py 异常: {e}")
+
+        # 创建后再次检测
+        python_path = _find_python()
+        if python_path:
+            logger.info(f"CountBot 环境创建成功: {python_path}")
+            ExecTool._countbot_python_cache = python_path
+            return python_path
+
+        logger.warning("CountBot 环境创建失败，将使用默认 Python")
+        ExecTool._countbot_python_cache = None
+        return None
 
     @staticmethod
     def _normalize_output_text(text: str) -> str:

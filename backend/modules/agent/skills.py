@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
+
+from backend.modules.wiki import BM25Index
 from backend.utils.paths import APPLICATION_ROOT
 
 # 默认内置技能目录
@@ -28,12 +30,12 @@ class Skill:
     """技能数据类"""
 
     def __init__(
-        self,
-        name: str,
-        path: Path,
-        content: str,
-        enabled: bool = True,
-        source: str = "workspace",
+            self,
+            name: str,
+            path: Path,
+            content: str,
+            enabled: bool = True,
+            source: str = "workspace",
     ):
         self.name = name
         self.path = path
@@ -54,20 +56,20 @@ class Skill:
             "always": False,
             "requires": {},
         }
-        
+
         # 解析 YAML frontmatter
         if self.content.startswith("---"):
             match = re.match(r"^---\n(.*?)\n---", self.content, re.DOTALL)
             if match:
                 yaml_content = match.group(1)
-                
+
                 # 简单的 YAML 解析
                 for line in yaml_content.split("\n"):
                     if ":" in line:
                         key, value = line.split(":", 1)
                         key = key.strip()
                         value = value.strip().strip('"\'')
-                        
+
                         if key == "title":
                             metadata["title"] = value
                         elif key == "description":
@@ -86,14 +88,14 @@ class Skill:
                                         metadata["always"] = skill_meta["always"]
                             except (json.JSONDecodeError, TypeError):
                                 pass
-        
+
         return metadata
 
     def get_summary(self) -> str:
         """获取技能摘要"""
         title = self.metadata.get("title", self.name)
         desc = self.metadata.get("description", "")
-        
+
         if desc:
             return f"- **{title}**: {desc}"
         return f"- **{title}**"
@@ -101,32 +103,32 @@ class Skill:
     def check_requirements(self) -> bool:
         """检查技能依赖是否满足"""
         requires = self.metadata.get("requires", {})
-        
+
         # 检查二进制依赖
         for binary in requires.get("bins", []):
             if not shutil.which(binary):
                 return False
-        
+
         # 检查环境变量
         for env_var in requires.get("env", []):
             if not os.environ.get(env_var):
                 return False
-        
+
         return True
 
     def get_missing_requirements(self) -> str:
         """获取缺失的依赖描述"""
         requires = self.metadata.get("requires", {})
         missing = []
-        
+
         for binary in requires.get("bins", []):
             if not shutil.which(binary):
                 missing.append(f"CLI: {binary}")
-        
+
         for env_var in requires.get("env", []):
             if not os.environ.get(env_var):
                 missing.append(f"ENV: {env_var}")
-        
+
         return ", ".join(missing)
 
 
@@ -138,10 +140,10 @@ class SkillsLoader:
     """
 
     def __init__(
-        self,
-        skills_dir: Path,
-        builtin_skills_dir: Optional[Path] = None,
-        external_skills_dirs: Optional[List[Path]] = None,
+            self,
+            skills_dir: Path,
+            builtin_skills_dir: Optional[Path] = None,
+            external_skills_dirs: Optional[List[Path]] = None,
     ):
         """
         初始化 SkillsLoader
@@ -153,26 +155,63 @@ class SkillsLoader:
         """
         self.workspace_skills = skills_dir
         self.workspace_skills.mkdir(parents=True, exist_ok=True)
-        
+
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.external_skills_dirs = external_skills_dirs
-        
+
         self.skills: Dict[str, Skill] = {}
-        
+
         # 加载禁用配置
         self.config_file = self.workspace_skills.parent / ".skills_config.json"
         self.disabled_skills = self._load_disabled_skills()
-        
+
         self._load_all_skills()
-        
+
+        self.skill_index: BM25Index = self._build_skill_index()  # 初始化技能索引
+
         logger.info(f"Loaded {len(self.skills)} skills")
-    
+
+    def search_skills(self, query: str, top_k: int = 3) -> List[str]:
+        """用 BM25 搜索与当前问题相关的技能名
+
+        Args:
+            query: 用户当前消息
+            top_k: 最多返回几个技能
+
+        Returns:
+            技能名列表，按相关度降序；无匹配时返回空列表
+        """
+        if not query or not hasattr(self, "skill_index") or not self.skill_index:
+            return []
+        results = self.skill_index.search(query, top_k=top_k)
+        return [doc_id for doc_id,_ in results]
+
+    def _build_skill_index(self):
+        """ 为skill建立索引，减少上下文，Token"""
+        index = BM25Index(k1=1.2, b=0.5)
+        for skill_name, skill in self.skills.items():
+            if not skill.enabled:
+                continue
+            if not skill.check_requirements():
+                continue
+            desc = skill.metadata.get("description", "")
+            tag = skill.metadata.get("tags", [])
+            search_text = f"{skill_name} {desc} {' '.join(tag)}"
+            index.add_document(
+                skill_name,  # doc_id → 搜索命中时返回的就是技能名
+                skill_name,  # title
+                search_text,  # content → 真正被分词的文本
+                tags=[],  # tags 已经拼进 content 了
+            )
+
+        return index
+
     def _load_disabled_skills(self) -> Set[str]:
         """从配置文件加载禁用的技能列表"""
         if not self.config_file.exists():
             logger.debug(f"Skills config file not found: {self.config_file}")
             return set()
-        
+
         try:
             config = json.loads(self.config_file.read_text(encoding="utf-8"))
             disabled = set(config.get("disabled_skills", []))
@@ -314,11 +353,15 @@ class SkillsLoader:
             for external_dir in self._discover_openclaw_skill_dirs():
                 for name, skill_file in self._iter_skill_files(external_dir) or []:
                     self._register_skill(name, skill_file, "openclaw")
-            
+
             logger.debug(f"Loaded {len(self.skills)} skills total")
-            
+            # 重建 BM25 索引
+            self._build_skill_index()
+
+
         except Exception as e:
             logger.error(f"Failed to load skills: {e}")
+
 
     def list_skills(self, enabled_only: bool = False, filter_unavailable: bool = False) -> List[dict]:
         """
@@ -332,23 +375,23 @@ class SkillsLoader:
             list: 技能信息列表
         """
         skills = []
-        
+
         for name, skill in self.skills.items():
             if enabled_only and not skill.enabled:
                 continue
-            
+
             if filter_unavailable and not skill.check_requirements():
                 continue
-            
+
             skills.append({
                 "name": name,
                 "enabled": skill.enabled,
                 "source": skill.source,
                 "path": str(skill.path),
             })
-        
+
         return skills
-    
+
     def load_skill(self, name: str) -> str:
         """
         加载技能内容
@@ -360,7 +403,7 @@ class SkillsLoader:
             str: 技能内容
         """
         return self.read_skill(name)
-    
+
     def get_skill_summary(self, name: str) -> dict:
         """
         获取技能摘要信息
@@ -374,13 +417,13 @@ class SkillsLoader:
         skill = self.get_skill(name)
         if not skill:
             return {}
-        
+
         return {
             "description": skill.metadata.get("description", ""),
             "auto_load": skill.metadata.get("always", False),
             "requirements": list(skill.metadata.get("requires", {}).get("bins", [])),
         }
-    
+
     def toggle_skill(self, name: str, enabled: bool) -> bool:
         """
         切换技能启用状态
@@ -426,12 +469,12 @@ class SkillsLoader:
             if skill:
                 content = self._strip_frontmatter(skill.content)
                 parts.append(f"### Skill: {name}\n\n{content}")
-        
+
         return "\n\n---\n\n".join(parts) if parts else ""
 
-    def build_skills_summary(self) -> str:
+    def build_skills_summary(self,skill_names:Optional[List[str]]=None) -> str:
         """
-        构建所有已启用技能的摘要 - 极简版
+        构建所有已启用技能且BM25检索到的摘要 - 极简版
         
         用于渐进式加载 - agent 可以在需要时使用 read_file 读取完整技能内容
         
@@ -440,23 +483,27 @@ class SkillsLoader:
         """
         if not self.skills:
             return ""
-        
+
         lines = []
         for name, skill in sorted(self.skills.items()):
             # 只包含已启用的技能
             if not skill.enabled:
                 continue
-            
+
             # 检查依赖是否满足
             available = skill.check_requirements()
             if not available:
                 continue
-            
+
+            #过滤掉不在BM25检索的技能
+            if skill_names is not None and name not in skill_names:
+                continue
+
             # 获取描述
             desc = skill.metadata.get("description", "")
             title = skill.metadata.get("title", name)
             desc = " ".join(str(desc or "").split())
-            
+
             # 紧凑格式：优先保留技能名，标题仅在明显不同于技能名时展示
             title_suffix = ""
             if title and title != name:
@@ -466,7 +513,7 @@ class SkillsLoader:
                 lines.append(f"- {name}{title_suffix}: {desc}")
             else:
                 lines.append(f"- {name}{title_suffix}")
-        
+
         return "\n".join(lines) if lines else ""
 
     def _strip_frontmatter(self, content: str) -> str:
@@ -505,7 +552,7 @@ class SkillsLoader:
         skill = self.get_skill(name)
         if not skill:
             raise ValueError(f"Skill '{name}' not found")
-        
+
         return skill.content
 
     def enable_skill(self, name: str) -> bool:
@@ -521,6 +568,8 @@ class SkillsLoader:
         skill = self.get_skill(name)
         if not skill:
             logger.warning(f"Cannot enable skill '{name}': not found")
+            self._build_skill_index()
+
             return False
 
         if skill.source == "openclaw":
@@ -534,10 +583,11 @@ class SkillsLoader:
             except Exception as e:
                 logger.error(f"Failed to import OpenClaw skill '{name}' to workspace: {e}")
                 return False
-        
+
         self.disabled_skills.discard(name)
         skill.enabled = True
         logger.info(f"Enabled skill: {name}")
+
         return True
 
     def disable_skill(self, name: str) -> bool:
@@ -554,10 +604,12 @@ class SkillsLoader:
         if not skill:
             logger.warning(f"Cannot disable skill '{name}': not found")
             return False
-        
+
         self.disabled_skills.add(name)
         skill.enabled = False
         logger.info(f"Disabled skill: {name}")
+
+        self._build_skill_index()
         return True
 
     def check_dependencies(self, name: str) -> Tuple[bool, List[str]]:
@@ -573,16 +625,16 @@ class SkillsLoader:
         skill = self.get_skill(name)
         if not skill:
             return False, [f"Skill '{name}' not found"]
-        
+
         dependencies = skill.metadata.get("dependencies", [])
         missing = []
-        
+
         for dep in dependencies:
             if dep not in self.skills:
                 missing.append(dep)
             elif not self.skills[dep].enabled:
                 missing.append(f"{dep} (disabled)")
-        
+
         return len(missing) == 0, missing
 
     def get_summary(self, auto_load_only: bool = False) -> str:
@@ -596,19 +648,19 @@ class SkillsLoader:
             str: 技能摘要文本
         """
         summaries = []
-        
+
         for name, skill in sorted(self.skills.items()):
             if not skill.enabled:
                 continue
-            
+
             if auto_load_only and not skill.auto_load:
                 continue
-            
+
             summaries.append(skill.get_summary())
-        
+
         if not summaries:
             return ""
-        
+
         return "\n".join(summaries)
 
     def get_auto_load_skills(self) -> List[str]:
@@ -635,16 +687,16 @@ class SkillsLoader:
             str: 合并的技能内容
         """
         contents = []
-        
+
         for name, skill in sorted(self.skills.items()):
             if not skill.enabled:
                 continue
-            
+
             if auto_load_only and not skill.auto_load:
                 continue
-            
+
             contents.append(f"## Skill: {skill.metadata.get('title', name)}\n\n{skill.content}")
-        
+
         return "\n\n---\n\n".join(contents)
 
     def reload(self) -> None:
@@ -653,6 +705,7 @@ class SkillsLoader:
         self.disabled_skills = self._load_disabled_skills()
         self.skills.clear()
         self._load_all_skills()
+        self._build_skill_index()
 
     def add_skill(self, name: str, content: str) -> bool:
         """
@@ -670,14 +723,14 @@ class SkillsLoader:
             skill_dir = self.workspace_skills / name
             skill_dir.mkdir(parents=True, exist_ok=True)
             skill_file = skill_dir / "SKILL.md"
-            
+
             if skill_file.exists():
                 logger.warning(f"Skill '{name}' already exists")
                 return False
-            
+
             # 写入技能文件
             skill_file.write_text(content, encoding="utf-8")
-            
+
             # 创建技能对象
             skill = Skill(
                 name=name,
@@ -688,15 +741,18 @@ class SkillsLoader:
             )
 
             self.disabled_skills.discard(name)
-            
+
             # 添加到技能字典
             self.skills[name] = skill
             logger.info(f"Added new skill: {name}")
+
+            self._build_skill_index()
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to add skill '{name}': {e}")
             return False
+
 
     def update_skill(self, name: str, content: str) -> bool:
         """
@@ -713,24 +769,26 @@ class SkillsLoader:
         if not skill:
             logger.warning(f"Cannot update skill '{name}': not found")
             return False
-        
+
         # 只能更新工作空间技能
         if skill.source != "workspace":
             logger.warning(f"Cannot update skill '{name}': not a workspace skill")
             return False
-        
+
         try:
             # 写入技能文件
             skill.path.write_text(content, encoding="utf-8")
-            
+
             # 更新技能对象
             skill.content = content
             skill.metadata = skill._parse_metadata()
             skill.auto_load = skill.metadata.get("always", False)
-            
+
             logger.info(f"Updated skill: {name}")
+
+            self._build_skill_index()
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to update skill '{name}': {e}")
             return False
@@ -753,7 +811,7 @@ class SkillsLoader:
         if skill.source != "workspace":
             logger.warning(f"Cannot delete skill '{name}': not a workspace skill")
             return False
-        
+
         try:
             skill_dir = skill.path.parent
             if skill_dir.exists() and skill_dir.parent == self.workspace_skills:
@@ -764,8 +822,10 @@ class SkillsLoader:
             self.disabled_skills.discard(name)
             del self.skills[name]
             logger.info(f"Deleted skill: {name}")
+
+            self._build_skill_index()
+
             return True
-            
         except Exception as e:
             logger.error(f"Failed to delete skill '{name}': {e}")
             return False

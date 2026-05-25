@@ -6,7 +6,6 @@ import platform
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 from loguru import logger
 
 
@@ -118,18 +117,23 @@ class ContextBuilder:
                         parts.append(f"# 已激活技能\n\n{always_content}")
 
                 # 3.2 可用技能摘要（按需加载）- 极简版
-                skills_summary = self.skills.build_skills_summary()
-                if skills_summary:
-                    parts.append(
-                        "# 可用技能（Skills）\n"
-                        "下面展示的是技能元信息里的完整 description，不是技能全文。"
-                        "技能是文档，不是工具。需要时先用 `read_file` 读取对应 `SKILL.md`，"
-                        "默认首次整文件读取；只有文档很大且目标段落明确时才用 `start_line/end_line`。"
-                        "如果需要同时查看多个 Skills，优先一次调用 "
-                        "`read_file(paths=['skills/a/SKILL.md', 'skills/b/SKILL.md'])` 批量读取，减少工具调用次数。"
-                        "读完后再按文档说明调用 `exec`。\n\n"
-                        f"{skills_summary}"
-                    )
+                # skills_summary = self.skills.build_skills_summary()
+                if skill_names:
+                    # 只展示 BM25 搜索到的相关技能 + always 技能
+                    skills_summary = self.skills.build_skills_summary(skill_names=skill_names)
+                else:
+                    # 向后兼容：skill_names 为空时展示全部
+                    skills_summary = self.skills.build_skills_summary()
+                parts.append(
+                    "# 可用技能（Skills）\n"
+                    "下面展示的是技能元信息里的完整 description，不是技能全文。"
+                    "技能是文档，不是工具。需要时先用 `read_file` 读取对应 `SKILL.md`，"
+                    "默认首次整文件读取；只有文档很大且目标段落明确时才用 `start_line/end_line`。"
+                    "如果需要同时查看多个 Skills，优先一次调用 "
+                    "`read_file(paths=['skills/a/SKILL.md', 'skills/b/SKILL.md'])` 批量读取，减少工具调用次数。"
+                    "读完后再按文档说明调用 `exec`。\n\n"
+                    f"{skills_summary}"
+                )
             except Exception as e:
                 logger.warning(f"Failed to load skills: {e}")
 
@@ -434,6 +438,7 @@ class ContextBuilder:
    - 例如：读取配置文件后，回复应包含用户可能询问的关键配置项
    - 原则：假设用户可能会在后续对话中询问这些数据的细节
 {external_coding_guidance}
+7. **CountBot Python 环境**: exec 工具会自动优先使用 CountBot conda 环境的 Python，直接运行 `python xxx` 即可使用 CountBot 环境。首次调用 Python 技能前，先运行 `python skills/countbot-env/scripts/setup_env.py` 检查环境是否就绪（exec 默认工作目录就是 workspace），除非无法使用，否则不要绕过检测而直接使用替代工具。
 
 ## 文件操作规范（必须遵守）
 1. **大文件分段写入**: 当需要写入的内容较长（如完整 HTML 页面、大段代码等超过 2000 字符），**必须**分多次调用 write_file：
@@ -523,7 +528,12 @@ class ContextBuilder:
     ) -> List[Dict[str, Any]]:
         """构建完整的消息列表用于 LLM 调用"""
         messages = []
-        
+
+        if self.skills and current_message:
+            relevant_skills = self.skills.search_skills(current_message,top_k=3)
+            always_skills = self.skills.get_always_skills()
+            skill_names = list(set(relevant_skills + always_skills))
+
         system_prompt = self.build_system_prompt(
             skill_names,
             persona_config=persona_config,

@@ -22,30 +22,35 @@ API Key 从 [百度千帆平台](https://console.bce.baidu.com/qianfan/ais/conso
 
 ## 命令行调用
 
+> **前提**: 确保已创建并激活 `CountBot` 环境
+> ```bash
+> conda activate CountBot
+> ```
+
 ```bash
 # 网页搜索（默认）
-python3 skills/baidu-search/scripts/search.py "搜索关键词"
+python skills/baidu-search/scripts/search.py "搜索关键词"
 
 # JSON 输出（推荐 AI 使用）
-python3 skills/baidu-search/scripts/search.py "人工智能最新进展" --json
+python skills/baidu-search/scripts/search.py "人工智能最新进展" --json
 
 # 限制结果数
-python3 skills/baidu-search/scripts/search.py "Python教程" --limit 5
+python skills/baidu-search/scripts/search.py "Python教程" --limit 5
 
 # 站点过滤
-python3 skills/baidu-search/scripts/search.py "天气预报" --sites weather.com.cn
+python skills/baidu-search/scripts/search.py "天气预报" --sites weather.com.cn
 
 # 时间过滤（week/month/semiyear/year）
-python3 skills/baidu-search/scripts/search.py "AI新闻" --recency week
+python skills/baidu-search/scripts/search.py "AI新闻" --recency week
 
 # 百度百科
-python3 skills/baidu-search/scripts/search.py "人工智能" --api-type baike
+python skills/baidu-search/scripts/search.py "人工智能" --api-type baike
 
 # 秒懂百科（视频）
-python3 skills/baidu-search/scripts/search.py "深度学习" --api-type miaodong_baike
+python skills/baidu-search/scripts/search.py "深度学习" --api-type miaodong_baike
 
 # AI 智能生成
-python3 skills/baidu-search/scripts/search.py "什么是人工智能" --api-type ai_chat
+python skills/baidu-search/scripts/search.py "什么是人工智能" --api-type ai_chat
 ```
 
 ## API 类型

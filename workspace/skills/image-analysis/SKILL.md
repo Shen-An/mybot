@@ -36,25 +36,25 @@ API Key 获取：
 
 ```bash
 # 分析本地图片（最常用）
-python3 skills/image-analysis/scripts/vision.py analyze --image 图片路径 --prompt "描述图片内容"
+python skills/image-analysis/scripts/vision.py analyze --image 图片路径 --prompt "描述图片内容"
 
 # 分析网络图片
-python3 skills/image-analysis/scripts/vision.py analyze --image https://example.com/image.jpg --prompt "描述图片"
+python skills/image-analysis/scripts/vision.py analyze --image https://example.com/image.jpg --prompt "描述图片"
 
 # 多图对比
-python3 skills/image-analysis/scripts/vision.py analyze --image img1.jpg --image img2.jpg --prompt "对比差异"
+python skills/image-analysis/scripts/vision.py analyze --image img1.jpg --image img2.jpg --prompt "对比差异"
 
 # 指定模型
-python3 skills/image-analysis/scripts/vision.py analyze --image image.jpg --prompt "描述图片" --model qwen
+python skills/image-analysis/scripts/vision.py analyze --image image.jpg --prompt "描述图片" --model qwen
 
 # 开启思考模式（仅智谱，提升准确度）
-python3 skills/image-analysis/scripts/vision.py analyze --image image.jpg --prompt "详细分析" --thinking
+python skills/image-analysis/scripts/vision.py analyze --image image.jpg --prompt "详细分析" --thinking
 
 # 视频分析
-python3 skills/image-analysis/scripts/vision.py analyze --video video.mp4 --prompt "总结视频内容"
+python skills/image-analysis/scripts/vision.py analyze --video video.mp4 --prompt "总结视频内容"
 
 # JSON 输出
-python3 skills/image-analysis/scripts/vision.py analyze --image image.jpg --prompt "描述图片" --json
+python skills/image-analysis/scripts/vision.py analyze --image image.jpg --prompt "描述图片" --json
 ```
 
 ## AI 调用场景
@@ -63,13 +63,13 @@ python3 skills/image-analysis/scripts/vision.py analyze --image image.jpg --prom
 
 ```bash
 # 图片描述
-python3 skills/image-analysis/scripts/vision.py analyze --image data/temp/images/xxx.jpg --prompt "描述这张图片的内容"
+python skills/image-analysis/scripts/vision.py analyze --image data/temp/images/xxx.jpg --prompt "描述这张图片的内容"
 
 # OCR 识别
-python3 skills/image-analysis/scripts/vision.py analyze --image data/temp/images/xxx.jpg --prompt "提取图片中的所有文字信息"
+python skills/image-analysis/scripts/vision.py analyze --image data/temp/images/xxx.jpg --prompt "提取图片中的所有文字信息"
 
 # 物体定位（开启思考模式）
-python3 skills/image-analysis/scripts/vision.py analyze --image data/temp/images/xxx.jpg --prompt "找出物体位置，返回坐标" --thinking
+python skills/image-analysis/scripts/vision.py analyze --image data/temp/images/xxx.jpg --prompt "找出物体位置，返回坐标" --thinking
 ```
 
 ## 模型选择

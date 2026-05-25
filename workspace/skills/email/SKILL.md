@@ -20,36 +20,37 @@ homepage: https://github.com/countbot-ai/CountBot
 
 ## 命令行调用
 
+> **前提**: 确保已创建并激活 `CountBot` 环境
 ```bash
 # 发送邮件
-python3 skills/email/scripts/mail.py send --to user@example.com --subject "主题" --content "内容"
+python skills/email/scripts/mail.py send --to user@example.com --subject "主题" --content "内容"
 
 # 发送带附件
-python3 skills/email/scripts/mail.py send --to user@example.com --subject "报告" --content "请查收" --attach report.pdf
+python skills/email/scripts/mail.py send --to user@example.com --subject "报告" --content "请查收" --attach report.pdf
 
 # 接收最新邮件
-python3 skills/email/scripts/mail.py receive --limit 5
+python skills/email/scripts/mail.py receive --limit 5
 
 # 接收邮件（JSON 输出，推荐 AI 使用）
-python3 skills/email/scripts/mail.py receive --limit 5 --json
+python skills/email/scripts/mail.py receive --limit 5 --json
 
 # 检查新邮件（最近 N 天）
-python3 skills/email/scripts/mail.py check-new --since 1
+python skills/email/scripts/mail.py check-new --since 1
 
 # 检查新邮件（JSON 输出）
-python3 skills/email/scripts/mail.py check-new --since 1 --json
+python skills/email/scripts/mail.py check-new --since 1 --json
 
 # 删除邮件（移到已删除文件夹，QQ邮箱可恢复）
-python3 skills/email/scripts/mail.py delete --ids 123
+python skills/email/scripts/mail.py delete --ids 123
 
 # 批量删除
-python3 skills/email/scripts/mail.py delete --ids 123 124 125
+python skills/email/scripts/mail.py delete --ids 123 124 125
 
 # 彻底删除（不可恢复）
-python3 skills/email/scripts/mail.py delete --ids 123 --permanent
+python skills/email/scripts/mail.py delete --ids 123 --permanent
 
 # 指定邮箱类型
-python3 skills/email/scripts/mail.py --mailbox 163 send --to user@example.com --subject "测试"
+python skills/email/scripts/mail.py --mailbox 163 send --to user@example.com --subject "测试"
 ```
 
 ## 删除邮件说明
