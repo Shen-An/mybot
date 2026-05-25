@@ -27,6 +27,7 @@
         "@vueuse/core": "^10.7.0",
         "axios": "1.13.4",
         "highlight.js": "^11.9.0",
+        "katex": "^0.17.0",
         "lucide-vue-next": "0.300.0",
         "marked": "^11.0.0",
         "mermaid": "^11.13.0",
@@ -37,6 +38,7 @@
         "vue-router": "4.6.4"
     },
     "devDependencies": {
+        "@types/katex": "^0.16.8",
         "@types/node": "^20.10.0",
         "@vitejs/plugin-vue": "^5.0.0",
         "@vue/tsconfig": "^0.5.0",

@@ -1,5 +1,6 @@
 import { marked } from 'marked'
 import hljs from 'highlight.js'
+import katex from 'katex'
 import { copyTextToClipboard } from '@/utils/clipboard'
 import { t } from '@/i18n'
 
@@ -154,6 +155,38 @@ const installCodeCopyHandler = () => {
 }
 
 /**
+ * Render block math ($$...$$) to KaTeX HTML
+ */
+const renderLatexBlock = (text: string): string => {
+    return text.replace(/\$\$([\s\S]+?)\$\$/g, (_, equation: string) => {
+        try {
+            return katex.renderToString(equation.trim(), {
+                displayMode: true,
+                throwOnError: false
+            })
+        } catch {
+            return `$$\n${equation}\n$$`
+        }
+    })
+}
+
+/**
+ * Render inline math ($...$) to KaTeX HTML
+ */
+const renderLatexInline = (text: string): string => {
+    return text.replace(/(?<!\$)\$([^\n$]+?)\$(?!\$)/g, (_, equation: string) => {
+        try {
+            return katex.renderToString(equation.trim(), {
+                displayMode: false,
+                throwOnError: false
+            })
+        } catch {
+            return `$${equation}$`
+        }
+    })
+}
+
+/**
  * Markdown rendering composable with syntax highlighting
  * 
  * Features:
@@ -261,7 +294,10 @@ export function useMarkdown() {
         if (!markdown) return ''
 
         try {
-            return marked.parse(markdown) as string
+            // Render LaTeX before markdown, so KaTeX HTML passes through marked untouched
+            let html = renderLatexBlock(markdown)
+            html = renderLatexInline(html)
+            return marked.parse(html) as string
         } catch (error) {
             console.error('Markdown rendering error:', error)
             return markdown // Fallback to plain text

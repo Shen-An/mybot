@@ -8,6 +8,7 @@ import router from './router'
 import { pinia } from './store'
 import i18n from './i18n'
 import './assets/styles/main.css'
+import 'katex/dist/katex.min.css'
 
 const VITE_PRELOAD_RELOAD_KEY = '__countbot_vite_preload_reload_at__'
 const VITE_PRELOAD_RELOAD_COOLDOWN_MS = 10_000
