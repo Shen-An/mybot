@@ -3,10 +3,15 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Index, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+
+try:
+    from backend.models.user import User  # noqa: F401
+except ImportError:
+    pass
 
 
 class CronJob(Base):
@@ -15,6 +20,7 @@ class CronJob(Base):
     __tablename__ = "cron_jobs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     schedule: Mapped[str] = mapped_column(String, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)

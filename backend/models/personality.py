@@ -1,12 +1,17 @@
 """性格模型"""
 
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
-from sqlalchemy import Boolean, DateTime, String, Text, JSON
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+
+try:
+    from backend.models.user import User  # noqa: F401
+except ImportError:
+    pass
 
 
 class Personality(Base):
@@ -15,6 +20,8 @@ class Personality(Base):
     __tablename__ = "personalities"
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    owner_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    is_shared: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # 是否共享给所有用户
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     traits: Mapped[List[str]] = mapped_column(JSON, nullable=False)  # ["暴躁", "嘴硬心软"]

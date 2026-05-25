@@ -1,4 +1,4 @@
-"""Authentication helpers for password hashing and remote auth sessions."""
+"""Authentication helpers for password hashing and multi-user auth sessions."""
 
 import base64
 import hashlib
@@ -7,13 +7,11 @@ import json
 import re
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from loguru import logger
 from sqlalchemy import select
-
-
-_AUTH_SESSION_PREFIX = "auth.session."
 
 TOKEN_EXPIRY = 86400
 
@@ -110,8 +108,7 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
         return hmac.compare_digest(_b64encode(derived), expected_b64)
 
-    # Backward compatibility for legacy SHA-256 hashes. These should be rotated
-    # on the next successful password change or bootstrap.
+    # Backward compatibility for legacy SHA-256 hashes.
     if ":" in stored_hash:
         salt, expected_hash = stored_hash.split(":", 1)
         actual_hash = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
@@ -125,142 +122,220 @@ def needs_password_rehash(stored_hash: str) -> bool:
     return not stored_hash.startswith("scrypt$")
 
 
-def _session_key(token: str) -> str:
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    return f"{_AUTH_SESSION_PREFIX}{token_hash}"
+def _token_hash(token: str) -> str:
+    """SHA256 hash a token for storage as primary key."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _parse_session_value(raw_value: str) -> Optional[dict]:
-    try:
-        data = json.loads(raw_value)
-    except Exception:
-        return None
-
-    if not isinstance(data, dict):
-        return None
-
-    username = data.get("username")
-    created_at = data.get("created_at")
-
-    if not isinstance(username, str) or not username:
-        return None
-
-    try:
-        created_at = float(created_at)
-    except (TypeError, ValueError):
-        return None
-
-    return {"username": username, "created_at": created_at}
+def utc_now():
+    """返回带时区的UTC时间"""
+    return datetime.now(timezone.utc)
 
 
-def _is_expired(session_data: dict, now: Optional[float] = None) -> bool:
-    current_time = now if now is not None else time.time()
-    return current_time - session_data["created_at"] > TOKEN_EXPIRY
+def _utcnow_naive():
+    """返回不带时区的UTC时间 — 用于与SQLite存储值比较"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _cleanup_expired() -> None:
-    """Remove expired or malformed auth sessions from persistent storage."""
-    from backend.database import SessionLocal
-    from backend.models.setting import Setting
+# ============================================================
+# 新：基于 auth_sessions 表的会话管理（多用户）
+# ============================================================
 
-    now = time.time()
-    deleted = 0
-
-    with SessionLocal() as db:
-        result = db.execute(
-            select(Setting).where(Setting.key.like(f"{_AUTH_SESSION_PREFIX}%"))
-        )
-        for setting in result.scalars().all():
-            session_data = _parse_session_value(setting.value)
-            if session_data is None or _is_expired(session_data, now):
-                db.delete(setting)
-                deleted += 1
-
-        if deleted:
-            db.commit()
-
-
-def create_session(username: str) -> str:
-    """Create a new persistent session token."""
-    from backend.database import SessionLocal
-    from backend.models.setting import Setting
+async def create_auth_session(user_id: int, db) -> str:
+    """Create a new auth session for a user. Writes to auth_sessions table."""
+    from backend.models.auth_session import AuthSession
 
     token = secrets.token_urlsafe(32)
-    payload = json.dumps({"username": username, "created_at": time.time()})
+    token_hash = _token_hash(token)
+    expires_at = datetime.utcfromtimestamp(time.time() + TOKEN_EXPIRY)
 
-    with SessionLocal() as db:
-        db.merge(Setting(key=_session_key(token), value=payload))
-        db.commit()
+    auth_session = AuthSession(
+        token_hash=token_hash,
+        user_id=user_id,
+        created_at=utc_now(),
+        expires_at=expires_at,
+    )
+    db.add(auth_session)
+    await db.commit()
 
-    _cleanup_expired()
-    logger.info(f"Auth session created for user: {username}")
+    await _cleanup_auth_sessions(db)
+    logger.info(f"AUTH 会话已创建: user_id={user_id}")
     return token
 
 
-def validate_session(token: str) -> Optional[str]:
-    """Validate a session token and return the username when valid."""
+async def validate_auth_session(token: str, db) -> Optional[int]:
+    """Validate a session token and return the user_id when valid."""
     if not token:
         return None
 
-    from backend.database import SessionLocal
-    from backend.models.setting import Setting
+    from backend.models.auth_session import AuthSession
 
-    with SessionLocal() as db:
-        setting = db.get(Setting, _session_key(token))
-        if setting is None:
-            return None
+    token_hash = _token_hash(token)
+    result = await db.execute(select(AuthSession).where(AuthSession.token_hash == token_hash))
+    session = result.scalar_one_or_none()
 
-        session_data = _parse_session_value(setting.value)
-        if session_data is None or _is_expired(session_data):
-            db.delete(setting)
-            db.commit()
-            return None
+    if session is None:
+        return None
 
-        return session_data["username"]
+    if _utcnow_naive() > session.expires_at:
+        db.delete(session)
+        await db.commit()
+        return None
+
+    return session.user_id
 
 
-def revoke_session(token: str) -> bool:
-    """Revoke a single session token."""
+async def revoke_auth_session(token: str, db) -> bool:
+    """Revoke a single auth session."""
     if not token:
         return False
 
-    from backend.database import SessionLocal
-    from backend.models.setting import Setting
+    from backend.models.auth_session import AuthSession
 
-    with SessionLocal() as db:
-        setting = db.get(Setting, _session_key(token))
-        if setting is None:
-            return False
+    token_hash = _token_hash(token)
+    result = await db.execute(select(AuthSession).where(AuthSession.token_hash == token_hash))
+    session = result.scalar_one_or_none()
 
-        db.delete(setting)
-        db.commit()
-        return True
+    if session is None:
+        return False
+
+    await db.delete(session)
+    await db.commit()
+    return True
 
 
-def revoke_all_sessions(username: Optional[str] = None) -> int:
+async def revoke_all_auth_sessions(db, user_id: Optional[int] = None) -> int:
     """Revoke all sessions, or all sessions owned by one user."""
-    from backend.database import SessionLocal
-    from backend.models.setting import Setting
+    from backend.models.auth_session import AuthSession
 
     removed = 0
-    now = time.time()
+    now = _utcnow_naive()
 
-    with SessionLocal() as db:
-        result = db.execute(
-            select(Setting).where(Setting.key.like(f"{_AUTH_SESSION_PREFIX}%"))
-        )
-        for setting in result.scalars().all():
-            session_data = _parse_session_value(setting.value)
-            if session_data is None or _is_expired(session_data, now):
-                db.delete(setting)
-                removed += 1
-                continue
+    query = select(AuthSession)
+    if user_id is not None:
+        query = query.where(AuthSession.user_id == user_id)
 
-            if username is None or session_data["username"] == username:
-                db.delete(setting)
-                removed += 1
+    result = await db.execute(query)
+    for session in result.scalars().all():
+        if now > session.expires_at:
+            db.delete(session)
+            removed += 1
+            continue
+        db.delete(session)
+        removed += 1
 
-        if removed:
-            db.commit()
+    if removed:
+        await db.commit()
 
     return removed
+
+
+async def _cleanup_auth_sessions(db) -> None:
+    """Remove expired auth sessions and legacy settings entries."""
+    from backend.models.auth_session import AuthSession
+    from backend.models.setting import Setting
+
+    now = _utcnow_naive()
+    result = await db.execute(select(AuthSession).where(AuthSession.expires_at < now))
+    for session in result.scalars().all():
+        await db.delete(session)
+
+    # Also clean up legacy settings table for auth.session.* keys
+    legacy_result = await db.execute(select(Setting).where(Setting.key.like("auth.session.%")))
+    for setting in legacy_result.scalars().all():
+        db.delete(setting)
+
+    await db.commit()
+
+
+# ============================================================
+# 新：用户 CRUD 操作
+# ============================================================
+
+async def get_user_by_username(username: str, db):
+    """Get user by username."""
+    from backend.models.user import User
+    result = await db.execute(select(User).where(User.username == username))
+    return result.scalar_one_or_none()
+
+
+async def get_user_by_id(user_id: int, db):
+    """Get user by ID."""
+    from backend.models.user import User
+    return await db.get(User, user_id)
+
+
+async def create_user(username: str, password_hash: str, role: str = "user", display_name: Optional[str] = None, db=None) -> int:
+    """Create a new user. Returns user_id."""
+    from backend.models.user import User
+
+    user = User(
+        username=username,
+        password_hash=password_hash,
+        role=role,
+        display_name=display_name or username,
+        is_active=True,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    logger.info(f"Created user: username={username}, id={user.id}, role={role}")
+    return user.id
+
+
+async def update_user(user_id: int, username: Optional[str] = None, password_hash: Optional[str] = None,
+                role: Optional[str] = None, display_name: Optional[str] = None,
+                is_active: Optional[bool] = None, db=None) -> bool:
+    """Update user fields. Returns True if updated."""
+    from backend.models.user import User
+
+    user = await db.get(User, user_id)
+    if user is None:
+        return False
+
+    if username is not None:
+        user.username = username
+    if password_hash is not None:
+        user.password_hash = password_hash
+    if role is not None:
+        user.role = role
+    if display_name is not None:
+        user.display_name = display_name
+    if is_active is not None:
+        user.is_active = is_active
+    user.updated_at = utc_now()
+
+    await db.commit()
+    logger.info(f"Updated user: id={user_id}")
+    return True
+
+
+async def delete_user(user_id: int, db) -> bool:
+    """Delete a user. Returns True if deleted."""
+    from backend.models.user import User
+
+    user = await db.get(User, user_id)
+    if user is None:
+        return False
+
+    # Cannot delete the last admin
+    if user.role == "admin":
+        result = await db.execute(select(User).where(User.role == "admin"))
+        admins = result.scalars().all()
+        if len(admins) <= 1:
+            logger.warning(f"Cannot delete the last admin user: id={user_id}")
+            return False
+
+    await db.delete(user)
+    await db.commit()
+    logger.info(f"Deleted user: id={user_id}")
+    return True
+
+
+async def list_users(db):
+    """List all users."""
+    from backend.models.user import User
+    result = await db.execute(select(User).order_by(User.id))
+    return result.scalars().all()

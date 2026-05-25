@@ -3,7 +3,7 @@
 from typing import Dict, List, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, Depends
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,7 @@ from backend.modules.config.loader import config_loader
 from backend.modules.tools.registry import ToolRegistry
 from backend.modules.tools.conversation_history import get_conversation_history
 from backend.modules.tools.file_audit_logger import file_audit_logger
+from backend.modules.auth.dependencies import get_current_user_id
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
 
@@ -120,20 +121,17 @@ def get_tool_registry() -> ToolRegistry:
 
 
 @router.post("/execute", response_model=ExecuteToolResponse)
-async def execute_tool(request: ExecuteToolRequest) -> ExecuteToolResponse:
+async def execute_tool(
+    request: ExecuteToolRequest,
+    user_id: int = Depends(get_current_user_id),
+) -> ExecuteToolResponse:
     """
-    执行工具
-    
-    Args:
-        request: 执行工具请求
-        
-    Returns:
-        ExecuteToolResponse: 执行结果
+    执行工具（按用户隔离）
     """
     try:
         # 隐藏的工具列表（禁止前端直接调用）
         hidden_tools = {'read_file', 'write_file', 'edit_file', 'list_dir', 'exec', 'todo'}
-        
+
         # 安全检查：禁止调用隐藏的工具
         if request.tool in hidden_tools:
             logger.warning(f"Blocked attempt to execute hidden tool: {request.tool}")
@@ -141,32 +139,32 @@ async def execute_tool(request: ExecuteToolRequest) -> ExecuteToolResponse:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Tool '{request.tool}' is not available for direct execution"
             )
-        
+
         tools = get_tool_registry()
-        
+
+        # 设置当前用户上下文
+        tools.set_user_id(user_id)
+
         # 执行工具
         result = await tools.execute(
             tool_name=request.tool,
             arguments=request.arguments,
         )
-        
+
         return ExecuteToolResponse(
             result=result,
             success=True,
         )
-        
+
     except HTTPException:
-        # 重新抛出 HTTP 异常
         raise
     except ValueError as e:
-        # 工具不存在或参数错误
         logger.warning(f"Tool execution failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
-        # 执行错误
         logger.exception(f"Tool execution error: {e}")
         return ExecuteToolResponse(
             result="",
@@ -176,22 +174,22 @@ async def execute_tool(request: ExecuteToolRequest) -> ExecuteToolResponse:
 
 
 @router.get("/list", response_model=ListToolsResponse)
-async def list_tools() -> ListToolsResponse:
+async def list_tools(
+    user_id: int = Depends(get_current_user_id),
+) -> ListToolsResponse:
     """
     获取所有可用工具列表
-    
-    Returns:
-        ListToolsResponse: 工具列表
     """
     try:
         tools = get_tool_registry()
-        
+        tools.set_user_id(user_id)
+
         # 获取工具定义
         definitions = tools.get_definitions()
-        
+
         # 隐藏的工具列表（不在前端显示）
         hidden_tools = {'read_file', 'write_file', 'edit_file', 'list_dir', 'exec', 'todo'}
-        
+
         # 转换为响应格式，过滤隐藏的工具
         tool_list = [
             ToolDefinition(
@@ -202,9 +200,9 @@ async def list_tools() -> ListToolsResponse:
             for tool_def in definitions
             if tool_def["function"]["name"] not in hidden_tools
         ]
-        
+
         return ListToolsResponse(tools=tool_list)
-        
+
     except Exception as e:
         logger.exception(f"Failed to list tools: {e}")
         raise HTTPException(
@@ -215,48 +213,40 @@ async def list_tools() -> ListToolsResponse:
 
 @router.get("/conversations", response_model=ConversationHistoryResponse)
 async def get_conversations(
+    user_id: int = Depends(get_current_user_id),
     session_id: Optional[str] = Query(None, description="按会话ID过滤"),
     tool_name: Optional[str] = Query(None, description="按工具名称过滤"),
     limit: Optional[int] = Query(None, description="限制返回数量"),
     offset: int = Query(0, description="偏移量，用于分页")
 ) -> ConversationHistoryResponse:
     """
-    获取工具调用对话历史
-    
-    Args:
-        session_id: 可选，按会话ID过滤
-        tool_name: 可选，按工具名称过滤
-        limit: 可选，限制返回数量
-        offset: 偏移量，用于分页（默认0）
-        
-    Returns:
-        ConversationHistoryResponse: 对话历史记录
+    获取工具调用对话历史（按用户隔离）
     """
     try:
         conversation_history = get_conversation_history()
-        
+
         # 隐藏的工具列表
         hidden_tools = {'read_file', 'write_file', 'edit_file', 'list_dir', 'shell', 'todo'}
-        
-        # 根据参数获取不同的记录
+
+        # 根据参数获取不同的记录（按 user_id 过滤）
         if session_id:
-            conversations = await conversation_history.get_by_session(session_id, limit, offset)
+            conversations = await conversation_history.get_by_session(session_id, limit, offset, user_id=user_id)
         elif tool_name:
-            conversations = await conversation_history.get_by_tool(tool_name, limit, offset)
+            conversations = await conversation_history.get_by_tool(tool_name, limit, offset, user_id=user_id)
         else:
-            conversations = await conversation_history.get_all(limit, offset)
-        
+            conversations = await conversation_history.get_all(limit, offset, user_id=user_id)
+
         # 过滤隐藏的工具
         filtered_conversations = [
             conv for conv in conversations
             if conv.get('tool_name') not in hidden_tools
         ]
-        
+
         return ConversationHistoryResponse(
             conversations=filtered_conversations,
             total=len(filtered_conversations)
         )
-        
+
     except Exception as e:
         logger.exception(f"Failed to get conversation history: {e}")
         raise HTTPException(
@@ -266,24 +256,23 @@ async def get_conversations(
 
 
 @router.get("/conversations/stats", response_model=ConversationStatsResponse)
-async def get_conversation_stats() -> ConversationStatsResponse:
+async def get_conversation_stats(
+    user_id: int = Depends(get_current_user_id),
+) -> ConversationStatsResponse:
     """
-    获取工具调用对话统计信息
-    
-    Returns:
-        ConversationStatsResponse: 统计信息
+    获取工具调用对话统计信息（按用户隔离）
     """
     try:
         conversation_history = get_conversation_history()
-        stats = await conversation_history.get_stats()
-        
+        stats = await conversation_history.get_stats(user_id=user_id)
+
         return ConversationStatsResponse(
             total=stats["total"],
             by_tool=stats["by_tool"],
             by_session=stats["by_session"],
             success_rate=stats["success_rate"]
         )
-        
+
     except Exception as e:
         logger.exception(f"Failed to get conversation stats: {e}")
         raise HTTPException(
@@ -293,19 +282,18 @@ async def get_conversation_stats() -> ConversationStatsResponse:
 
 
 @router.delete("/conversations")
-async def clear_conversations() -> dict:
+async def clear_conversations(
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
     """
-    清空所有工具调用对话历史
-    
-    Returns:
-        dict: 操作结果
+    清空当前用户的工具调用对话历史
     """
     try:
         conversation_history = get_conversation_history()
-        conversation_history.clear()
-        
+        conversation_history.clear_for_user(user_id)
+
         return {"success": True, "message": "Conversation history cleared"}
-        
+
     except Exception as e:
         logger.exception(f"Failed to clear conversation history: {e}")
         raise HTTPException(

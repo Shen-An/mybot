@@ -205,6 +205,28 @@
 .auth-user-status {
   font-size: 11px;
   color: var(--color-success, #10b981);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.role-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.role-badge.admin { background: #fee2e2; color: #dc2626; }
+.role-badge.operator { background: #fef3c7; color: #d97706; }
+.role-badge.user { background: #e0f2fe; color: #0284c7; }
+
+.remote-badge {
+  color: var(--color-warning, #f59e0b);
+  font-size: 10px;
 }
 
 .logout-btn {
@@ -430,6 +452,14 @@
 
 :root[data-theme="dark"] .auth-user-status {
   color: #89b7a8;
+}
+
+:root[data-theme="dark"] .role-badge.admin { background: rgba(254, 226, 226, 0.15); color: #f87171; }
+:root[data-theme="dark"] .role-badge.operator { background: rgba(254, 243, 199, 0.15); color: #fbbf24; }
+:root[data-theme="dark"] .role-badge.user { background: rgba(224, 242, 254, 0.15); color: #38bdf8; }
+
+:root[data-theme="dark"] .remote-badge {
+  color: #fbbf24;
 }
 
 :root[data-theme="dark"] .logout-btn {

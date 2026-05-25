@@ -3,10 +3,15 @@
 from datetime import datetime
 from typing import Any, List, Optional
 
-from sqlalchemy import Boolean, DateTime, String, Text, JSON
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+
+try:
+    from backend.models.user import User  # noqa: F401
+except ImportError:
+    pass
 
 
 class AgentTeam(Base):
@@ -28,6 +33,8 @@ class AgentTeam(Base):
     __tablename__ = "agent_teams"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    is_shared: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # admin 可共享给其他用户
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

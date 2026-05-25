@@ -1,4 +1,4 @@
-"""性格管理 API"""
+"""性格管理 API — 多用户支持"""
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.models.personality import Personality
+from backend.modules.auth.dependencies import get_current_user_id, get_current_admin_user
 
 router = APIRouter(prefix="/api/personalities", tags=["personalities"])
 
@@ -34,19 +35,22 @@ class PersonalityUpdate(BaseModel):
 
 @router.get("")
 async def list_personalities(
+    user_id: int = Depends(get_current_user_id),
     active_only: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
-    """获取所有性格列表"""
-    query = select(Personality)
+    """获取当前用户可见的性格（自己的 + 共享的 + 内置的）"""
+    query = select(Personality).where(
+        (Personality.owner_id == user_id) | (Personality.is_shared == True) | (Personality.is_builtin == True)
+    )
     if active_only:
         query = query.where(Personality.is_active == True)  # noqa: E712
-    
+
     query = query.order_by(Personality.is_builtin.desc(), Personality.created_at)
-    
+
     result = await db.execute(query)
     personalities = result.scalars().all()
-    
+
     return {
         "personalities": [p.to_dict() for p in personalities],
         "total": len(personalities)
@@ -73,19 +77,20 @@ async def get_personality(
 @router.post("")
 async def create_personality(
     data: PersonalityCreate,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db)
 ):
-    """创建自定义性格"""
-    # 检查 ID 是否已存在
+    """创建自定义性格（归属到当前用户）"""
     result = await db.execute(
         select(Personality).where(Personality.id == data.id)
     )
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="性格 ID 已存在")
-    
-    # 创建新性格
+
     personality = Personality(
         id=data.id,
+        owner_id=user_id,
+        is_shared=False,
         name=data.name,
         description=data.description,
         traits=data.traits,
@@ -94,11 +99,11 @@ async def create_personality(
         is_builtin=False,
         is_active=True,
     )
-    
+
     db.add(personality)
     await db.commit()
     await db.refresh(personality)
-    
+
     return personality.to_dict()
 
 
@@ -106,57 +111,71 @@ async def create_personality(
 async def update_personality(
     personality_id: str,
     data: PersonalityUpdate,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db)
 ):
-    """更新性格（内置和自定义性格都可以修改）"""
+    """更新性格（只能修改自己的非内置性格）"""
     result = await db.execute(
-        select(Personality).where(Personality.id == personality_id)
+        select(Personality).where(
+            Personality.id == personality_id,
+            (Personality.owner_id == user_id) | (Personality.is_builtin == True)
+        )
     )
     personality = result.scalar_one_or_none()
-    
+
     if not personality:
         raise HTTPException(status_code=404, detail="性格不存在")
-    
-    # 内置性格和自定义性格都可以修改所有字段
-    if data.name is not None:
-        personality.name = data.name
-    if data.description is not None:
-        personality.description = data.description
-    if data.traits is not None:
-        personality.traits = data.traits
-    if data.speaking_style is not None:
-        personality.speaking_style = data.speaking_style
-    if data.icon is not None:
-        personality.icon = data.icon
-    if data.is_active is not None:
-        personality.is_active = data.is_active
-    
+
+    # 内置性格只能修改 is_active，自定义性格可以修改所有字段
+    if personality.is_builtin:
+        if data.name is not None or data.description is not None or data.traits is not None or data.speaking_style is not None or data.icon is not None:
+            raise HTTPException(status_code=403, detail="内置性格不能修改名称、描述、特质、说话风格和图标")
+        if data.is_active is not None:
+            personality.is_active = data.is_active
+    else:
+        if data.name is not None:
+            personality.name = data.name
+        if data.description is not None:
+            personality.description = data.description
+        if data.traits is not None:
+            personality.traits = data.traits
+        if data.speaking_style is not None:
+            personality.speaking_style = data.speaking_style
+        if data.icon is not None:
+            personality.icon = data.icon
+        if data.is_active is not None:
+            personality.is_active = data.is_active
+
     await db.commit()
     await db.refresh(personality)
-    
+
     return personality.to_dict()
 
 
 @router.delete("/{personality_id}")
 async def delete_personality(
     personality_id: str,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db)
 ):
-    """删除性格（仅限自定义性格）"""
+    """删除性格（只能删除自己的非内置性格）"""
     result = await db.execute(
-        select(Personality).where(Personality.id == personality_id)
+        select(Personality).where(
+            Personality.id == personality_id,
+            Personality.owner_id == user_id
+        )
     )
     personality = result.scalar_one_or_none()
-    
+
     if not personality:
         raise HTTPException(status_code=404, detail="性格不存在")
-    
+
     if personality.is_builtin:
         raise HTTPException(status_code=403, detail="内置性格不能删除，只能禁用")
-    
+
     await db.delete(personality)
     await db.commit()
-    
+
     return {"message": "删除成功"}
 
 
@@ -170,31 +189,31 @@ class DuplicateRequest(BaseModel):
 async def duplicate_personality(
     personality_id: str,
     request: DuplicateRequest,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db)
 ):
     """复制性格（用于基于内置性格创建自定义版本）"""
     new_id = request.new_id
     new_name = request.new_name
-    # 获取源性格
+
     result = await db.execute(
         select(Personality).where(Personality.id == personality_id)
     )
     source = result.scalar_one_or_none()
-    
+
     if not source:
         raise HTTPException(status_code=404, detail="源性格不存在")
-    
-    
-    # 检查新 ID 是否已存在
+
     result = await db.execute(
         select(Personality).where(Personality.id == new_id)
     )
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="新性格 ID 已存在")
-    
-    # 创建副本
+
     personality = Personality(
         id=new_id,
+        owner_id=user_id,
+        is_shared=False,
         name=new_name or f"{source.name} (副本)",
         description=source.description,
         traits=source.traits.copy(),
@@ -203,9 +222,9 @@ async def duplicate_personality(
         is_builtin=False,
         is_active=True,
     )
-    
+
     db.add(personality)
     await db.commit()
     await db.refresh(personality)
-    
+
     return personality.to_dict()

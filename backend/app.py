@@ -316,6 +316,7 @@ async def lifespan(app: FastAPI):
         temperature=config.model.temperature,
         max_tokens=config.model.max_tokens,
         thinking_enabled=config.model.thinking_enabled,
+        user_id=None,  # cron 是系统级任务，无特定用户
     )
     logger.info("Cron agent created")
 
@@ -490,19 +491,22 @@ from backend.ws.connection import handle_websocket
 
 @app.websocket("/ws/chat")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket 聊天端点，复用共享组件"""
+    """WebSocket 聊天端点，复用共享组件 — 多用户支持"""
+    from backend.database import get_db_session_factory
     from backend.modules.agent.loop import AgentLoop
+    from backend.modules.auth.context import set_current_user_context
+    from backend.modules.auth.utils import validate_auth_session, get_user_by_id
     from backend.modules.providers import create_provider
     from backend.modules.providers.registry import get_provider_metadata
     from backend.modules.tools.setup import register_all_tools
 
     from backend.modules.auth.middleware import AUTH_COOKIE_NAME, is_direct_local_client
-    from backend.modules.auth.utils import validate_session as validate_ws_session
     from backend.modules.auth.router import get_password_hash as get_ws_password_hash
 
     client_ip = websocket.client.host if websocket.client and websocket.client.host else None
     is_local = is_direct_local_client(client_ip, websocket.headers.keys())
 
+    user_id = None
     if not is_local:
         auth_enabled = bool(await get_ws_password_hash())
         if not auth_enabled:
@@ -515,11 +519,52 @@ async def websocket_endpoint(websocket: WebSocket):
             if auth_header.startswith("Bearer "):
                 token = auth_header[7:]
 
-        if not token or not validate_ws_session(token):
+        if not token:
             await websocket.close(code=4001, reason="Authentication required")
             return
 
+        # Validate session and get user_id
+        db = get_db_session_factory()()
+        try:
+            user_id = await validate_auth_session(token, db)
+            if user_id is None:
+                await websocket.close(code=4001, reason="Authentication required")
+                return
+
+            user = await get_user_by_id(user_id, db)
+            if user is None or not user.is_active:
+                await websocket.close(code=4001, reason="User not found or deactivated")
+                return
+
+            # Set contextvars for non-HTTP code paths
+            set_current_user_context(user.id, user.username, user.role)
+
+            # Store user_id in websocket app state for AgentLoop
+            websocket.app.state.user_id = user.id
+        finally:
+            await db.close()
+
+    if is_local and user_id is None:
+        # 本地 WebSocket 无 token 时，使用首个 admin 作为默认用户
+        db2 = get_db_session_factory()()
+        try:
+            from backend.models.user import User
+            from sqlalchemy import select
+            result = await db2.execute(
+                select(User).where(User.is_active == True).order_by(User.id).limit(1)  # noqa: E712
+            )
+            default_user = result.scalar_one_or_none()
+            if default_user and default_user.is_active:
+                user_id = default_user.id
+                set_current_user_context(default_user.id, default_user.username, default_user.role)
+                websocket.app.state.user_id = default_user.id
+        finally:
+            await db2.close()
+
     shared = websocket.app.state.shared
+
+    # 提前 accept WebSocket（客户端无需等待后端初始化）
+    await websocket.accept()
 
     # 每个 WebSocket 连接使用独立的工具注册表（会话隔离）
     tool_registry = register_all_tools(
@@ -592,6 +637,7 @@ async def websocket_endpoint(websocket: WebSocket):
         temperature=config.model.temperature,
         max_tokens=config.model.max_tokens,
         thinking_enabled=config.model.thinking_enabled,
+        user_id=getattr(websocket.app.state, 'user_id', None),
     )
 
     await handle_websocket(websocket, agent_loop=agent_loop)

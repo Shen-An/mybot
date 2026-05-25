@@ -1,9 +1,14 @@
 """工具调用对话历史数据模型"""
 
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Text, DateTime, Index
+from sqlalchemy import Column, String, Integer, Text, DateTime, Index, ForeignKey
 
 from backend.database import Base
+
+try:
+    from backend.models.user import User  # noqa: F401
+except ImportError:
+    pass
 
 
 class ToolConversation(Base):
@@ -12,6 +17,7 @@ class ToolConversation(Base):
     __tablename__ = "tool_conversations"
     
     id = Column(String, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     session_id = Column(String, nullable=False, index=True)
     message_id = Column(Integer, nullable=True, index=True)  # 关联的消息ID
     timestamp = Column(String, nullable=False, index=True)

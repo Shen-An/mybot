@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db, get_db_session_factory
 from backend.modules.agent.context import ContextBuilder
+from backend.modules.auth.dependencies import get_current_user_id
 from backend.modules.agent.loop import AgentLoop
 from backend.modules.agent.memory import MemoryStore
 from backend.modules.agent.skills import SkillsLoader
@@ -605,6 +606,7 @@ async def get_agent_loop(
             temperature=runtime_config.temperature,
             max_tokens=runtime_config.max_tokens,
             thinking_enabled=runtime_config.thinking_enabled,
+            user_id=getattr(request.state, 'user_id', None),
         )
         
         return agent_loop
@@ -1187,25 +1189,16 @@ async def send_message(
 
 @router.get("/sessions", response_model=List[SessionResponse])
 async def list_sessions(
+    user_id: int = Depends(get_current_user_id),
     limit: Optional[int] = None,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ) -> List[SessionResponse]:
-    """
-    获取所有会话列表
-    
-    Args:
-        limit: 返回数量限制（可选）
-        offset: 偏移量
-        db: 数据库会话
-        
-    Returns:
-        List[SessionResponse]: 会话列表
-    """
+    """获取当前用户的会话列表"""
     try:
         session_manager = SessionManager(db)
-        sessions = await session_manager.list_sessions(limit=limit, offset=offset)
-        
+        sessions = await session_manager.list_sessions(user_id=user_id, limit=limit, offset=offset)
+
         return [
             SessionResponse(
                 id=session.id,
@@ -1217,7 +1210,7 @@ async def list_sessions(
             )
             for session in sessions
         ]
-        
+
     except Exception as e:
         logger.exception(f"Failed to list sessions: {e}")
         raise HTTPException(
@@ -1229,29 +1222,21 @@ async def list_sessions(
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(
     name: str,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> SessionResponse:
-    """
-    创建新会话
-    
-    Args:
-        name: 会话名称
-        db: 数据库会话
-        
-    Returns:
-        SessionResponse: 创建的会话
-    """
+    """创建新会话"""
     try:
         session_manager = SessionManager(db)
-        session = await session_manager.create_session(name=name)
-        
+        session = await session_manager.create_session(name=name, user_id=user_id)
+
         return SessionResponse(
             id=session.id,
             name=session.name,
             created_at=to_utc_iso(session.created_at),
             updated_at=to_utc_iso(session.updated_at),
         )
-        
+
     except Exception as e:
         logger.exception(f"Failed to create session: {e}")
         raise HTTPException(
@@ -1263,24 +1248,13 @@ async def create_session(
 @router.delete("/sessions/{session_id}")
 async def delete_session(
     session_id: str,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, bool]:
-    """
-    删除会话
-    
-    Args:
-        session_id: 会话 ID
-        db: 数据库会话
-        
-    Returns:
-        dict: 删除结果
-        
-    Raises:
-        HTTPException: 会话不存在
-    """
+    """删除会话"""
     try:
         session_manager = SessionManager(db)
-        success = await session_manager.delete_session(session_id)
+        success = await session_manager.delete_session(session_id, user_id=user_id)
         
         if not success:
             raise HTTPException(

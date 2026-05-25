@@ -21,6 +21,9 @@ from backend.modules.tools.file_audit_logger import file_audit_logger
 _session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     'session_id', default=None
 )
+_user_id_context: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    'user_id', default=None
+)
 _channel_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     'channel', default=None
 )
@@ -143,6 +146,15 @@ class ToolRegistry:
     def message_context(self) -> Optional[Dict[str, Any]]:
         """获取当前上下文的入站消息上下文（异步安全）。"""
         return _message_context.get()
+
+    @property
+    def user_id(self) -> Optional[int]:
+        """获取当前上下文的用户ID（异步安全）。"""
+        return _user_id_context.get()
+
+    def set_user_id(self, user_id: Optional[int]) -> None:
+        """设置当前上下文的用户ID（异步安全）。"""
+        _user_id_context.set(user_id)
 
     def register(self, tool: Tool) -> None:
         """
@@ -360,6 +372,7 @@ class ToolRegistry:
                             arguments=arguments,
                             error=error_msg,
                             duration_ms=0,
+                            user_id=self.user_id,
                         )
                     except Exception as conv_err:
                         logger.warning(f"Failed to record tool conversation: {conv_err}")
@@ -380,7 +393,7 @@ class ToolRegistry:
                         error=error_msg,
                         duration_ms=0,
                     )
-                
+
                 # 记录到工具对话历史（参数验证失败）
                 if auto_record and self._session_id:
                     try:
@@ -391,11 +404,12 @@ class ToolRegistry:
                             tool_name=tool_name,
                             arguments=arguments,
                             error=error_msg,
-                            duration_ms=0
+                            duration_ms=0,
+                            user_id=self.user_id,
                         )
                     except Exception as conv_err:
                         logger.warning(f"Failed to record tool conversation: {conv_err}")
-                
+
                 return error_msg
             
             logger.info(f"Executing tool: {tool_name} with arguments: {arguments}")
@@ -429,6 +443,7 @@ class ToolRegistry:
                         arguments=arguments,
                         result=result,
                         duration_ms=duration_ms,
+                        user_id=self.user_id,
                     )
                 except Exception as conv_err:
                     logger.warning(f"Failed to record tool conversation: {conv_err}")
@@ -458,6 +473,7 @@ class ToolRegistry:
                         arguments=arguments,
                         error=error_msg,
                         duration_ms=duration_ms,
+                        user_id=self.user_id,
                     )
                 except Exception as conv_err:
                     logger.warning(f"Failed to record tool conversation: {conv_err}")

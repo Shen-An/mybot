@@ -1,4 +1,4 @@
-"""Remote access authentication middleware."""
+"""Remote access authentication middleware — multi-user support."""
 
 from __future__ import annotations
 
@@ -13,8 +13,9 @@ from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend.modules.auth.utils import validate_session
-
+from backend.database import get_db_session_factory
+from backend.modules.auth.context import set_current_user_context, clear_current_user_context
+from backend.modules.auth.utils import validate_auth_session, get_user_by_id, get_user_by_username
 
 AUTH_COOKIE_NAME = "CountBot_token"
 SETUP_SECRET_HEADER_NAME = "x-setup-secret"
@@ -125,8 +126,29 @@ def _is_local_request(request: Request) -> bool:
     return is_direct_local_client(client_ip, request.headers.keys())
 
 
+async def _get_default_local_user(db) -> object | None:
+    """Return the first active admin user for local requests without a session."""
+    try:
+        from backend.models.user import User
+        from sqlalchemy import select
+        result = await db.execute(select(User).where(User.is_active == True).order_by(User.id).limit(1))  # noqa: E712
+        return result.scalar_one_or_none()
+    except Exception:
+        return None
+
+
+def _extract_token_from_request(request: Request) -> str | None:
+    """Extract auth token from cookie or Bearer header."""
+    token = request.cookies.get(AUTH_COOKIE_NAME)
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    return token or None
+
+
 class RemoteAuthMiddleware(BaseHTTPMiddleware):
-    """Protect non-local HTTP requests with cookie or bearer-token auth."""
+    """Protect non-local HTTP requests with cookie or bearer-token auth — multi-user."""
 
     def __init__(
         self,
@@ -140,6 +162,30 @@ class RemoteAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         if _is_local_request(request):
+            # 本地请求：尝试从 cookie/header 恢复用户上下文
+            local_token = _extract_token_from_request(request)
+
+            try:
+                db = get_db_session_factory()()
+                try:
+                    uid = None
+                    if local_token:
+                        uid = await validate_auth_session(local_token, db)
+
+                    if uid:
+                        u = await get_user_by_id(uid, db)
+                    else:
+                        # 无有效 token 时，使用首个 admin 作为默认本地用户
+                        u = await _get_default_local_user(db)
+                    if u and u.is_active:
+                        request.state.user_id = u.id
+                        request.state.user = u
+                        set_current_user_context(u.id, u.username, u.role)
+                finally:
+                    await db.close()
+            except Exception:
+                pass
+
             return await call_next(request)
 
         if not any(path.startswith(prefix) for prefix in _PROTECTED_PATH_PREFIXES):
@@ -164,16 +210,40 @@ class RemoteAuthMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Authentication setup required", "code": "AUTH_SETUP_REQUIRED"},
             )
 
-        token = request.cookies.get(AUTH_COOKIE_NAME)
-        if not token:
-            auth_header = request.headers.get("authorization", "")
-            if auth_header.startswith("Bearer "):
-                token = auth_header[7:]
+        token = _extract_token_from_request(request)
 
-        if not token or not validate_session(token):
+        if not token:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authentication required", "code": "AUTH_REQUIRED"},
             )
+
+        # Validate session and get user_id
+        db = get_db_session_factory()()
+        try:
+            user_id = await validate_auth_session(token, db)
+            if user_id is None:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Authentication required", "code": "AUTH_REQUIRED"},
+                )
+
+            # Load full user object
+            user = await get_user_by_id(user_id, db)
+            if user is None or not user.is_active:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "User not found or deactivated", "code": "AUTH_REQUIRED"},
+                )
+
+            # Set user context on request.state for downstream handlers
+            request.state.user_id = user.id
+            request.state.user = user
+
+            # Set contextvars for non-HTTP code paths
+            set_current_user_context(user.id, user.username, user.role)
+
+        finally:
+            await db.close()
 
         return await call_next(request)

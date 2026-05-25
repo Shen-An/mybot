@@ -1,4 +1,4 @@
-"""Agent Teams API — CRUD for user-defined multi-agent workflow templates."""
+"""Agent Teams API — CRUD for user-defined multi-agent workflow templates — 多用户支持"""
 
 import uuid
 from typing import Any, List, Literal, Optional
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.models.agent_team import AgentTeam
+from backend.modules.auth.dependencies import get_current_user_id, get_current_admin_user
 
 router = APIRouter(prefix="/api/agent-teams", tags=["agent-teams"])
 
@@ -112,8 +113,12 @@ def _to_response(team: AgentTeam) -> AgentTeamResponse:
     return AgentTeamResponse(**team.to_dict())
 
 
-async def _get_or_404(team_id: str, db: AsyncSession) -> AgentTeam:
-    result = await db.execute(select(AgentTeam).where(AgentTeam.id == team_id))
+async def _get_or_404(team_id: str, db: AsyncSession, user_id: Optional[int] = None) -> AgentTeam:
+    """获取团队，可选 user_id 过滤（只返回自己的或共享的）"""
+    query = select(AgentTeam).where(AgentTeam.id == team_id)
+    if user_id is not None:
+        query = query.where((AgentTeam.user_id == user_id) | (AgentTeam.is_shared == True))
+    result = await db.execute(query)
     team = result.scalar_one_or_none()
     if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -127,11 +132,16 @@ async def _get_or_404(team_id: str, db: AsyncSession) -> AgentTeam:
 
 
 @router.get("/", response_model=List[AgentTeamResponse])
-async def list_teams(db: AsyncSession = Depends(get_db)) -> List[AgentTeamResponse]:
-    """Return all agent teams ordered by creation time (newest first)."""
+async def list_teams(
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> List[AgentTeamResponse]:
+    """列出当前用户可见的团队（自己的 + 共享的）"""
     try:
         result = await db.execute(
-            select(AgentTeam).order_by(AgentTeam.created_at.desc())
+            select(AgentTeam).where(
+                (AgentTeam.user_id == user_id) | (AgentTeam.is_shared == True)
+            ).order_by(AgentTeam.created_at.desc())
         )
         teams = result.scalars().all()
         return [_to_response(t) for t in teams]
@@ -141,30 +151,39 @@ async def list_teams(db: AsyncSession = Depends(get_db)) -> List[AgentTeamRespon
 
 
 @router.get("/{team_id}", response_model=AgentTeamResponse)
-async def get_team(team_id: str, db: AsyncSession = Depends(get_db)) -> AgentTeamResponse:
-    team = await _get_or_404(team_id, db)
+async def get_team(
+    team_id: str,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> AgentTeamResponse:
+    team = await _get_or_404(team_id, db, user_id=user_id)
     return _to_response(team)
 
 
 @router.post("/", response_model=AgentTeamResponse, status_code=status.HTTP_201_CREATED)
 async def create_team(
     payload: AgentTeamCreate,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> AgentTeamResponse:
-    """Create a new agent team template."""
+    """创建新团队（归属到当前用户）"""
     try:
-        # 检查是否存在同名团队
         existing = await db.execute(
-            select(AgentTeam).where(AgentTeam.name == payload.name)
+            select(AgentTeam).where(
+                AgentTeam.name == payload.name,
+                (AgentTeam.user_id == user_id) | (AgentTeam.is_shared == True)
+            )
         )
         if existing.scalar_one_or_none() is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"团队名称 '{payload.name}' 已存在，请使用其他名称"
             )
-        
+
         team = AgentTeam(
             id=str(uuid.uuid4()),
+            user_id=user_id,
+            is_shared=False,
             name=payload.name,
             description=payload.description,
             mode=payload.mode,
@@ -189,17 +208,23 @@ async def create_team(
 async def update_team(
     team_id: str,
     payload: AgentTeamUpdate,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> AgentTeamResponse:
-    """Update an existing agent team."""
-    team = await _get_or_404(team_id, db)
+    """更新团队（只能修改自己的团队）"""
+    team = await _get_or_404(team_id, db, user_id=user_id)
+
+    # 只能修改自己的团队
+    if team.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只能修改自己的团队")
+
     try:
-        # 如果要修改名称，检查新名称是否与其他团队重复
         if payload.name is not None and payload.name != team.name:
             existing = await db.execute(
                 select(AgentTeam).where(
                     AgentTeam.name == payload.name,
-                    AgentTeam.id != team_id
+                    AgentTeam.id != team_id,
+                    (AgentTeam.user_id == user_id) | (AgentTeam.is_shared == True)
                 )
             )
             if existing.scalar_one_or_none() is not None:
@@ -208,7 +233,7 @@ async def update_team(
                     detail=f"团队名称 '{payload.name}' 已存在，请使用其他名称"
                 )
             team.name = payload.name
-        
+
         if payload.description is not None:
             team.description = payload.description
         if payload.mode is not None:
@@ -233,9 +258,17 @@ async def update_team(
 
 
 @router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_team(team_id: str, db: AsyncSession = Depends(get_db)) -> None:
-    """Delete an agent team."""
-    team = await _get_or_404(team_id, db)
+async def delete_team(
+    team_id: str,
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """删除团队（只能删除自己的团队）"""
+    team = await _get_or_404(team_id, db, user_id=user_id)
+
+    if team.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只能删除自己的团队")
+
     try:
         await db.delete(team)
         await db.commit()
@@ -253,16 +286,14 @@ async def delete_team(team_id: str, db: AsyncSession = Depends(get_db)) -> None:
 @router.get("/{team_id}/config", response_model=TeamModelConfigResponse)
 async def get_team_config(
     team_id: str,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> TeamModelConfigResponse:
-    """获取团队模型配置
-    
-    返回团队的有效配置（如果有自定义配置则返回，否则返回全局默认）
-    """
+    """获取团队模型配置"""
     import json
     from backend.modules.config.loader import config_loader
-    
-    team = await _get_or_404(team_id, db)
+
+    team = await _get_or_404(team_id, db, user_id=user_id)
     
     try:
         config = config_loader.config
@@ -309,13 +340,17 @@ async def get_team_config(
 async def update_team_config(
     team_id: str,
     request: TeamModelConfigRequest,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """更新团队模型配置"""
+    """更新团队模型配置（只能修改自己的团队）"""
     import json
     from datetime import datetime, timezone
-    
-    team = await _get_or_404(team_id, db)
+
+    team = await _get_or_404(team_id, db, user_id=user_id)
+
+    if team.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只能修改自己的团队")
     
     try:
         # 构建配置字典（只保存非空值）
@@ -367,12 +402,16 @@ async def update_team_config(
 @router.delete("/{team_id}/config")
 async def reset_team_config(
     team_id: str,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """重置团队模型配置为全局默认"""
+    """重置团队模型配置为全局默认（只能修改自己的团队）"""
     from datetime import datetime, timezone
-    
-    team = await _get_or_404(team_id, db)
+
+    team = await _get_or_404(team_id, db, user_id=user_id)
+
+    if team.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只能修改自己的团队")
     
     try:
         team.team_model_config = None

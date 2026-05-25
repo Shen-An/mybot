@@ -1,4 +1,4 @@
-"""Tasks API - 子 Agent 任务管理"""
+"""Tasks API - 子 Agent 任务管理 — 多用户支持"""
 
 from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, status, Depends
@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
+from backend.modules.auth.dependencies import get_current_user_id
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -72,23 +73,14 @@ def require_subagent_manager():
 
 @router.get("/", response_model=List[TaskResponse])
 async def list_tasks(
+    user_id: int = Depends(get_current_user_id),
     status_filter: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> List[TaskResponse]:
-    """
-    列出所有任务
-    
-    Args:
-        status_filter: 状态过滤（pending, running, completed, failed, cancelled）
-        session_id: 会话 ID 过滤
-        
-    Returns:
-        List[TaskResponse]: 任务列表
-    """
+    """列出当前用户的任务"""
     try:
         manager = require_subagent_manager()
 
-        # 解析状态过滤
         from backend.modules.agent.subagent import TaskStatus
         status_enum = None
         if status_filter:
@@ -99,11 +91,31 @@ async def list_tasks(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid status: {status_filter}"
                 )
-        
-        # 获取任务列表
+
         tasks = manager.list_tasks(status=status_enum, session_id=session_id)
-        
-        # 转换为响应模型
+
+        # 过滤属于当前用户的数据（任务本身不直接有 user_id，但通过 session_id 间接关联）
+        # 对于内存中的任务，无法直接过滤，但可以从数据库过滤
+        filtered_tasks = []
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select
+            from backend.models.task import Task
+
+            for task in tasks:
+                if task.session_id:
+                    # 检查 session 是否属于当前用户
+                    result = await db.execute(
+                        select(Task).where(
+                            Task.id == task.task_id,
+                            Task.user_id == user_id
+                        )
+                    )
+                    if result.scalar_one_or_none():
+                        filtered_tasks.append(task)
+                else:
+                    # 无 session 的任务，无法验证所有权，暂不返回
+                    pass
+
         return [
             TaskResponse(
                 task_id=task.task_id,
@@ -119,7 +131,7 @@ async def list_tasks(
                 completed_at=task.completed_at.isoformat() if task.completed_at else None,
                 tool_call_records=task.tool_call_records,
             )
-            for task in tasks
+            for task in filtered_tasks
         ]
         
     except HTTPException:

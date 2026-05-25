@@ -10,7 +10,10 @@
     >
       <span v-if="isConnecting || reconnectingVisible" class="status-bar-content">
         <span class="status-spinner" />
-        正在重连...（第 {{ reconnectAttemptsDisplay }}/10 次）
+        <template v-if="reconnectAttemptsDisplay > 0 || reconnectingVisible">
+          正在重连...（第 {{ reconnectAttemptsDisplay }}/10 次）
+        </template>
+        <template v-else>正在连接...</template>
       </span>
       <span v-else class="status-bar-content">
         连接已断开

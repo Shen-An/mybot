@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import List, Optional, TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Index, String, Text
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
 
 if TYPE_CHECKING:
     from backend.models.message import Message
+    from backend.models.user import User
 
 
 def utc_now():
@@ -25,6 +26,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -61,5 +63,7 @@ class Session(Base):
     messages: Mapped[List["Message"]] = relationship(
         "Message", back_populates="session", cascade="all, delete-orphan"
     )
+
+    user: Mapped["User"] = relationship("User", backref="sessions")
 
     __table_args__ = (Index("idx_sessions_updated", "updated_at"),)

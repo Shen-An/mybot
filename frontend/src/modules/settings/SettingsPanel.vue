@@ -15,6 +15,7 @@
         <button
           v-for="tab in tabs"
           :key="tab.id"
+          v-show="!tab.hidden"
           class="nav-item"
           :class="{ active: activeTab === tab.id }"
           @click="activeTab = tab.id"
@@ -45,6 +46,8 @@
           <ProviderConfig v-else-if="activeTab === 'provider'" />
 
           <ModelConfig v-else-if="activeTab === 'model'" />
+
+          <UserManagement v-else-if="activeTab === 'users'" />
 
           <div v-else-if="activeTab === 'persona'" class="persona-tabs">
             <div class="persona-tab-buttons">
@@ -156,11 +159,13 @@ import MultiAgentConfig from './MultiAgentConfig.vue'
 import ConfigImportExport from './ConfigImportExport.vue'
 import GeneralConfig from './GeneralConfig.vue'
 import MemoryPanel from '@/modules/memory/MemoryPanel.vue'
+import UserManagement from './UserManagement.vue'
 import { useSettingsStore } from '@/store/settings'
 import { useChannelsStore } from '@/store/channels'
 import { useExternalCodingToolsStore } from '@/store/externalCodingTools'
 import { useToast } from '@/composables/useToast'
 import type { SettingsTab } from '@/types/settings'
+import { useAuthStore } from '@/store/auth'
 
 interface Props {
   initialTab?: SettingsTab
@@ -188,11 +193,14 @@ watch(() => props.initialTab, (newTab) => {
   }
 })
 
+const authStore = useAuthStore()
+
 const tabs = [
   { id: 'general' as SettingsTab, icon: SettingsIcon, label: 'settings.tabs.general', shortLabel: 'settings.tabShort.general' },
   { id: 'provider' as SettingsTab, icon: ServerIcon, label: 'settings.tabs.provider', shortLabel: 'settings.tabShort.provider' },
   { id: 'model' as SettingsTab, icon: SlidersIcon, label: 'settings.tabs.model', shortLabel: 'settings.tabShort.model' },
   { id: 'persona' as SettingsTab, icon: PersonIcon, label: 'settings.tabs.persona', shortLabel: 'settings.tabShort.persona' },
+  { id: 'users' as SettingsTab, icon: PersonIcon, label: 'settings.tabs.users', shortLabel: 'settings.tabShort.users', hidden: !authStore.isAdmin },
   { id: 'memory' as SettingsTab, icon: BrainIcon, label: 'settings.tabs.memory', shortLabel: 'settings.tabShort.memory' },
   { id: 'workspace' as SettingsTab, icon: FolderIcon, label: 'settings.tabs.workspace', shortLabel: 'settings.tabShort.workspace' },
   { id: 'security' as SettingsTab, icon: ShieldIcon, label: 'settings.tabs.security', shortLabel: 'settings.tabShort.security' },

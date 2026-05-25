@@ -308,6 +308,7 @@ class ChannelMessageHandler:
         thinking_enabled: bool = True,
         max_history_messages: int = 50,
         memory_store=None,
+        user_id: Optional[int] = None,
     ):
         self.bus = bus
         self.rate_limiter = rate_limiter
@@ -339,6 +340,7 @@ class ChannelMessageHandler:
             temperature=temperature,
             max_tokens=max_tokens,
             thinking_enabled=thinking_enabled,
+            user_id=user_id,
         )
 
     def _rebuild_tool_registry(self) -> None:

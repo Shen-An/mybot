@@ -48,6 +48,7 @@ class AgentLoop:
         temperature: float = 0.0,
         max_tokens: int = 4096,
         thinking_enabled: bool = True,
+        user_id: Optional[int] = None,
     ):
         self.provider = provider
         self.workspace = workspace
@@ -62,10 +63,11 @@ class AgentLoop:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.thinking_enabled = thinking_enabled
+        self.user_id = user_id
         self._key_rotation_count = 0
-        
+
         logger.debug(
-            f"AgentLoop initialized: max_iterations={max_iterations}, max_retries={max_retries}"
+            f"AgentLoop initialized: max_iterations={max_iterations}, max_retries={max_retries}, user_id={user_id}"
         )
 
     @staticmethod
@@ -479,7 +481,8 @@ class AgentLoop:
                                     arguments=tool_args,
                                     user_message=message,
                                     result=result,
-                                    duration_ms=duration_ms
+                                    duration_ms=duration_ms,
+                                    user_id=self.user_id,
                                 )
                             except Exception as e:
                                 logger.warning(f"Failed to record tool conversation: {e}")
@@ -550,7 +553,8 @@ class AgentLoop:
                                     arguments=tool_args,
                                     user_message=message,
                                     error=error_msg,
-                                    duration_ms=duration_ms
+                                    duration_ms=duration_ms,
+                                    user_id=self.user_id,
                                 )
                             except Exception as e:
                                 logger.warning(f"Failed to record tool conversation: {e}")

@@ -1,4 +1,4 @@
-"""Settings API 端点"""
+"""Settings API 端点 — 多用户支持"""
 
 import json
 import os
@@ -20,6 +20,7 @@ from backend.modules.external_agents.registry import ExternalAgentRegistry
 from backend.modules.providers.runtime import get_provider_runtime_state
 from backend.modules.workspace import seed_bundled_workspace_resources, workspace_manager
 from backend.version import APP_VERSION
+from backend.modules.auth.dependencies import get_current_admin_user, get_current_user_id
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -877,15 +878,12 @@ class TestConnectionResponse(BaseModel):
 
 
 @router.get("/providers", response_model=List[ProviderMetadataResponse])
-async def get_available_providers() -> List[ProviderMetadataResponse]:
-    """
-    获取所有可用的 Provider
-    
-    Returns:
-        List[ProviderMetadataResponse]: Provider 列表
-    """
+async def get_available_providers(
+    user_id: int = Depends(get_current_user_id),
+) -> List[ProviderMetadataResponse]:
+    """获取所有可用的 Provider（全局列表，但用户可有自己的 Provider 配置）"""
     from backend.modules.providers.registry import get_all_providers
-    
+
     config = config_loader.config
     providers = get_all_providers()
     response: List[ProviderMetadataResponse] = []
@@ -912,78 +910,82 @@ async def get_available_providers() -> List[ProviderMetadataResponse]:
 
 
 @router.get("", response_model=SettingsResponse)
-async def get_settings() -> SettingsResponse:
-    """
-    获取所有设置
-    
-    Returns:
-        SettingsResponse: 设置信息
-    """
+async def get_settings(
+    user_id: int = Depends(get_current_user_id),
+) -> SettingsResponse:
+    """获取当前用户的设置（用户配置优先，回退全局默认）"""
     try:
+        from backend.modules.config.user_config import get_all_user_config
+
         config = config_loader.config
-        
-        # 构建 providers 响应（不脱敏，直接返回）
-        providers_response = {}
+        user_config = await get_all_user_config(user_id)
+
+        # 合并：用户配置覆盖全局配置
+        merged_providers = {}
         for name, provider_config in config.providers.items():
-            providers_response[name] = ProviderConfigResponse(
+            merged_providers[name] = ProviderConfigResponse(
                 enabled=provider_config.enabled,
                 api_key=provider_config.api_key,
                 api_keys=provider_config.get_effective_api_keys(),
                 api_base=provider_config.api_base,
             )
-        
+
+        # 应用用户配置覆盖
+        if "providers" in user_config:
+            for name, overrides in user_config["providers"].items():
+                if name in merged_providers and isinstance(overrides, dict):
+                    for key, value in overrides.items():
+                        if value is not None:
+                            setattr(merged_providers[name], key, value)
+
         # 构建响应
         return SettingsResponse(
-            providers=providers_response,
+            providers=merged_providers,
             model=ModelConfigResponse(
-                provider=config.model.provider,
-                model=config.model.model,
-                api_mode=_normalize_api_mode_value(config.model.api_mode),
-                temperature=config.model.temperature,
-                max_tokens=config.model.max_tokens,
-                max_iterations=config.model.max_iterations,
-                thinking_enabled=config.model.thinking_enabled,
+                provider=user_config.get("model", {}).get("provider") or config.model.provider,
+                model=user_config.get("model", {}).get("model") or config.model.model,
+                api_mode=_normalize_api_mode_value(user_config.get("model", {}).get("api_mode") or config.model.api_mode),
+                temperature=user_config.get("model", {}).get("temperature") or config.model.temperature,
+                max_tokens=user_config.get("model", {}).get("max_tokens") or config.model.max_tokens,
+                max_iterations=user_config.get("model", {}).get("max_iterations") or config.model.max_iterations,
+                thinking_enabled=user_config.get("model", {}).get("thinking_enabled") or config.model.thinking_enabled,
             ),
             workspace=WorkspaceConfigResponse(
-                path=config.workspace.path,
+                path=user_config.get("workspace", {}).get("path") or config.workspace.path,
             ),
             security=SecurityConfigResponse(
-                dangerous_commands_blocked=config.security.dangerous_commands_blocked,
-                custom_deny_patterns=config.security.custom_deny_patterns,
-                command_whitelist_enabled=config.security.command_whitelist_enabled,
-                custom_allow_patterns=config.security.custom_allow_patterns,
-                audit_log_enabled=config.security.audit_log_enabled,
-                command_timeout=config.security.command_timeout,
-                subagent_timeout=config.security.subagent_timeout,
-                max_output_length=config.security.max_output_length,
-                restrict_to_workspace=config.security.restrict_to_workspace,
+                dangerous_commands_blocked=user_config.get("security", {}).get("dangerous_commands_blocked") or config.security.dangerous_commands_blocked,
+                custom_deny_patterns=user_config.get("security", {}).get("custom_deny_patterns") or config.security.custom_deny_patterns,
+                command_whitelist_enabled=user_config.get("security", {}).get("command_whitelist_enabled") or config.security.command_whitelist_enabled,
+                custom_allow_patterns=user_config.get("security", {}).get("custom_allow_patterns") or config.security.custom_allow_patterns,
+                audit_log_enabled=user_config.get("security", {}).get("audit_log_enabled") or config.security.audit_log_enabled,
+                command_timeout=user_config.get("security", {}).get("command_timeout") or config.security.command_timeout,
+                subagent_timeout=user_config.get("security", {}).get("subagent_timeout") or config.security.subagent_timeout,
+                max_output_length=user_config.get("security", {}).get("max_output_length") or config.security.max_output_length,
+                restrict_to_workspace=user_config.get("security", {}).get("restrict_to_workspace") or config.security.restrict_to_workspace,
             ),
             persona=PersonaConfigResponse(
-                ai_name=config.persona.ai_name,
-                user_name=config.persona.user_name,
-                user_address=getattr(config.persona, 'user_address', ''),
-                output_language=getattr(config.persona, 'output_language', '中文'),
-                personality=config.persona.personality,
-                custom_personality=config.persona.custom_personality,
-                max_history_messages=config.persona.max_history_messages,
-                enable_short_context_summary=getattr(
-                    config.persona,
-                    'enable_short_context_summary',
-                    False,
-                ),
+                ai_name=user_config.get("persona", {}).get("ai_name") or config.persona.ai_name,
+                user_name=user_config.get("persona", {}).get("user_name") or config.persona.user_name,
+                user_address=user_config.get("persona", {}).get("user_address") or getattr(config.persona, 'user_address', ''),
+                output_language=user_config.get("persona", {}).get("output_language") or getattr(config.persona, 'output_language', '中文'),
+                personality=user_config.get("persona", {}).get("personality") or config.persona.personality,
+                custom_personality=user_config.get("persona", {}).get("custom_personality") or config.persona.custom_personality,
+                max_history_messages=user_config.get("persona", {}).get("max_history_messages") or config.persona.max_history_messages,
+                enable_short_context_summary=user_config.get("persona", {}).get("enable_short_context_summary") or getattr(config.persona, 'enable_short_context_summary', False),
                 heartbeat=HeartbeatConfigResponse(
-                    enabled=config.persona.heartbeat.enabled,
-                    channel=config.persona.heartbeat.channel,
-                    account_id=config.persona.heartbeat.account_id,
-                    chat_id=config.persona.heartbeat.chat_id,
-                    schedule=config.persona.heartbeat.schedule,
-                    idle_threshold_hours=config.persona.heartbeat.idle_threshold_hours,
-                    quiet_start=config.persona.heartbeat.quiet_start,
-                    quiet_end=config.persona.heartbeat.quiet_end,
-                    max_greets_per_day=config.persona.heartbeat.max_greets_per_day,
+                    enabled=user_config.get("persona", {}).get("heartbeat", {}).get("enabled") or config.persona.heartbeat.enabled,
+                    channel=user_config.get("persona", {}).get("heartbeat", {}).get("channel") or config.persona.heartbeat.channel,
+                    account_id=user_config.get("persona", {}).get("heartbeat", {}).get("account_id") or config.persona.heartbeat.account_id,
+                    chat_id=user_config.get("persona", {}).get("heartbeat", {}).get("chat_id") or config.persona.heartbeat.chat_id,
+                    schedule=user_config.get("persona", {}).get("heartbeat", {}).get("schedule") or config.persona.heartbeat.schedule,
+                    idle_threshold_hours=user_config.get("persona", {}).get("heartbeat", {}).get("idle_threshold_hours") or config.persona.heartbeat.idle_threshold_hours,
+                    quiet_start=user_config.get("persona", {}).get("heartbeat", {}).get("quiet_start") or config.persona.heartbeat.quiet_start,
+                    quiet_end=user_config.get("persona", {}).get("heartbeat", {}).get("quiet_end") or config.persona.heartbeat.quiet_end,
+                    max_greets_per_day=user_config.get("persona", {}).get("heartbeat", {}).get("max_greets_per_day") or config.persona.heartbeat.max_greets_per_day,
                 ),
             ),
-            workspace_migration=None,  # GET 请求不返回迁移信息
+            workspace_migration=None,
         )
         
     except Exception as e:
@@ -995,215 +997,78 @@ async def get_settings() -> SettingsResponse:
 
 
 @router.put("", response_model=SettingsResponse)
-async def update_settings(request: UpdateSettingsRequest, req: Request) -> SettingsResponse:
-    """
-    更新设置
-    
-    Args:
-        request: 更新设置请求
-        
-    Returns:
-        SettingsResponse: 更新后的设置
-    """
+async def update_settings(
+    request: UpdateSettingsRequest,
+    req: Request,
+    user_id: int = Depends(get_current_user_id),
+) -> SettingsResponse:
+    """更新当前用户的设置（用户级配置，不修改全局配置）"""
     try:
+        from backend.modules.config.user_config import set_user_config
+
         previous_heartbeat = config_loader.config.persona.heartbeat.model_dump()
-        config = config_loader.config.model_copy(deep=True)
         workspace_migration_info = None
         old_workspace = None
         validated_workspace_path = None
-        
+
+        # 构建用户配置字典
+        user_config_updates = {}
+
         if request.providers:
-            for name, provider_data in request.providers.items():
-                # 如果 provider 不存在，自动创建
-                if name not in config.providers:
-                    config.providers[name] = ProviderConfig()
+            user_config_updates["providers"] = request.providers
 
-                provider_config = config.providers[name]
-
-                if "enabled" in provider_data:
-                    provider_config.enabled = provider_data["enabled"]
-
-                if "api_key" in provider_data:
-                    provider_config.api_key = provider_data["api_key"]
-
-                if "api_keys" in provider_data:
-                    raw_keys = provider_data["api_keys"]
-                    if isinstance(raw_keys, list):
-                        provider_config.api_keys = [
-                            k for k in raw_keys if isinstance(k, str) and k.strip()
-                        ]
-                    else:
-                        provider_config.api_keys = []
-
-                if "api_base" in provider_data:
-                    provider_config.api_base = provider_data["api_base"]
-        
         if request.model:
-            if "provider" in request.model:
-                config.model.provider = request.model["provider"]
-            
-            if "model" in request.model:
-                config.model.model = request.model["model"]
+            user_config_updates["model"] = request.model
 
-            if "api_mode" in request.model:
-                config.model.api_mode = _normalize_api_mode_value(request.model["api_mode"])
-            
-            if "temperature" in request.model:
-                config.model.temperature = request.model["temperature"]
-            
-            if "max_tokens" in request.model:
-                config.model.max_tokens = request.model["max_tokens"]
-            
-            if "max_iterations" in request.model:
-                config.model.max_iterations = request.model["max_iterations"]
-
-            if "thinking_enabled" in request.model:
-                config.model.thinking_enabled = request.model["thinking_enabled"]
-        
         if request.workspace:
             if "path" in request.workspace:
                 requested_workspace = request.workspace["path"]
                 if isinstance(requested_workspace, str) and requested_workspace.strip():
                     old_workspace = workspace_manager.get_workspace_path()
                     validated_workspace_path = _validate_workspace_path_or_raise(requested_workspace)
-                    config.workspace.path = str(validated_workspace_path)
+                    user_config_updates["workspace"] = {"path": str(validated_workspace_path)}
                 else:
-                    config.workspace.path = requested_workspace
-        
+                    user_config_updates["workspace"] = {"path": requested_workspace}
+
         if request.security:
-            if "dangerous_commands_blocked" in request.security:
-                config.security.dangerous_commands_blocked = request.security["dangerous_commands_blocked"]
-            
-            if "custom_deny_patterns" in request.security:
-                config.security.custom_deny_patterns = _normalize_pattern_list(
-                    request.security["custom_deny_patterns"]
-                )
-            
-            if "command_whitelist_enabled" in request.security:
-                config.security.command_whitelist_enabled = request.security["command_whitelist_enabled"]
-            
-            if "custom_allow_patterns" in request.security:
-                config.security.custom_allow_patterns = _normalize_pattern_list(
-                    request.security["custom_allow_patterns"]
-                )
-            
-            if "audit_log_enabled" in request.security:
-                config.security.audit_log_enabled = request.security["audit_log_enabled"]
-            
-            if "command_timeout" in request.security:
-                timeout = request.security["command_timeout"]
-                # 处理空字符串或无效值
-                if timeout == "" or timeout is None:
-                    timeout = 180
-                elif isinstance(timeout, str):
-                    try:
-                        timeout = int(timeout)
-                    except ValueError:
-                        timeout = 180
-                # 确保在有效范围内
-                timeout = max(10, min(1800, int(timeout)))
-                config.security.command_timeout = timeout
-            
-            if "subagent_timeout" in request.security:
-                timeout = request.security["subagent_timeout"]
-                # 处理空字符串或无效值
-                if timeout == "" or timeout is None:
-                    timeout = 1200  # 默认值
-                elif isinstance(timeout, str):
-                    try:
-                        timeout = int(timeout)
-                    except ValueError:
-                        timeout = 1200
-                # 确保在有效范围内
-                timeout = max(60, min(3600, int(timeout)))
-                config.security.subagent_timeout = timeout
-            
-            if "max_output_length" in request.security:
-                length = request.security["max_output_length"]
-                # 处理空字符串或无效值
-                if length == "" or length is None:
-                    length = 10000  # 默认值
-                elif isinstance(length, str):
-                    try:
-                        length = int(length)
-                    except ValueError:
-                        length = 10000
-                # 确保在有效范围内
-                length = max(100, min(1000000, int(length)))
-                config.security.max_output_length = length
-            
-            if "restrict_to_workspace" in request.security:
-                config.security.restrict_to_workspace = request.security["restrict_to_workspace"]
+            user_config_updates["security"] = request.security
 
-            _validate_regex_patterns_or_raise(
-                config.security.custom_deny_patterns,
-                field_name="security.custom_deny_patterns",
-            )
-            _validate_regex_patterns_or_raise(
-                config.security.custom_allow_patterns,
-                field_name="security.custom_allow_patterns",
-            )
-        
         if request.persona:
-            if "ai_name" in request.persona:
-                config.persona.ai_name = request.persona["ai_name"]
-            
-            if "user_name" in request.persona:
-                config.persona.user_name = request.persona["user_name"]
-            
-            if "user_address" in request.persona:
-                config.persona.user_address = request.persona["user_address"]
+            user_config_updates["persona"] = request.persona
 
-            if "output_language" in request.persona:
-                config.persona.output_language = request.persona["output_language"] or "中文"
-            
-            if "personality" in request.persona:
-                config.persona.personality = request.persona["personality"]
-            
-            if "custom_personality" in request.persona:
-                config.persona.custom_personality = request.persona["custom_personality"]
-            
-            if "max_history_messages" in request.persona:
-                config.persona.max_history_messages = request.persona["max_history_messages"]
-
-            if "enable_short_context_summary" in request.persona:
-                config.persona.enable_short_context_summary = _coerce_boolean_value(
-                    request.persona["enable_short_context_summary"],
-                    field_name="persona.enable_short_context_summary",
-                )
-            
+            # 验证问候助手配置
             if "heartbeat" in request.persona:
                 hb = request.persona["heartbeat"]
                 if isinstance(hb, dict):
+                    # 构建临时 config 用于验证
+                    temp_persona = config_loader.config.persona.model_copy(deep=True)
                     if "enabled" in hb:
-                        config.persona.heartbeat.enabled = hb["enabled"]
+                        temp_persona.heartbeat.enabled = hb["enabled"]
                     if "channel" in hb:
-                        config.persona.heartbeat.channel = hb["channel"]
+                        temp_persona.heartbeat.channel = hb["channel"]
                     if "account_id" in hb:
-                        config.persona.heartbeat.account_id = hb["account_id"] or "default"
+                        temp_persona.heartbeat.account_id = hb["account_id"] or "default"
                     if "chat_id" in hb:
-                        config.persona.heartbeat.chat_id = hb["chat_id"]
+                        temp_persona.heartbeat.chat_id = hb["chat_id"]
                     if "schedule" in hb:
-                        config.persona.heartbeat.schedule = hb["schedule"]
+                        temp_persona.heartbeat.schedule = hb["schedule"]
                     if "idle_threshold_hours" in hb:
-                        config.persona.heartbeat.idle_threshold_hours = hb["idle_threshold_hours"]
+                        temp_persona.heartbeat.idle_threshold_hours = hb["idle_threshold_hours"]
                     if "quiet_start" in hb:
-                        config.persona.heartbeat.quiet_start = hb["quiet_start"]
+                        temp_persona.heartbeat.quiet_start = hb["quiet_start"]
                     if "quiet_end" in hb:
-                        config.persona.heartbeat.quiet_end = hb["quiet_end"]
+                        temp_persona.heartbeat.quiet_end = hb["quiet_end"]
                     if "max_greets_per_day" in hb:
-                        config.persona.heartbeat.max_greets_per_day = hb["max_greets_per_day"]
+                        temp_persona.heartbeat.max_greets_per_day = hb["max_greets_per_day"]
+                    _validate_and_normalize_heartbeat_settings(temp_persona)
 
-            if "heartbeat" in request.persona:
-                _validate_and_normalize_heartbeat_settings(config)
-        
-        # 保存配置（await 确保写入完成）
-        await config_loader.save_config(config)
-        config = config_loader.config
+        # 保存用户配置
+        for section, data in user_config_updates.items():
+            await set_user_config(user_id, section, data)
 
         runtime_workspace = validated_workspace_path.resolve() if validated_workspace_path is not None else None
-        
-        # 工作区迁移提示（如果有变更）
+
+        # 工作区迁移提示
         if runtime_workspace is not None:
             try:
                 if old_workspace is not None:
@@ -1223,9 +1088,10 @@ async def update_settings(request: UpdateSettingsRequest, req: Request) -> Setti
             except Exception as e:
                 logger.warning(f"Failed to check workspace migration: {e}")
 
+        # 热重载运行时（仅影响当前会话）
         await _apply_saved_config_runtime(
             req,
-            config,
+            config_loader.config,
             workspace_path=runtime_workspace,
             reload_persona=bool(request.persona),
             reload_provider_model=bool(request.providers or request.model),
@@ -1234,7 +1100,7 @@ async def update_settings(request: UpdateSettingsRequest, req: Request) -> Setti
         )
 
         if request.persona and "heartbeat" in request.persona:
-            current_heartbeat = config.persona.heartbeat.model_dump()
+            current_heartbeat = config_loader.config.persona.heartbeat.model_dump()
             if _heartbeat_plan_settings_changed(previous_heartbeat, current_heartbeat):
                 cron_executor = getattr(req.app.state, "cron_executor", None)
                 heartbeat_service = getattr(cron_executor, "heartbeat_service", None)
@@ -1243,16 +1109,15 @@ async def update_settings(request: UpdateSettingsRequest, req: Request) -> Setti
                         heartbeat_service.refresh_today_schedule(reason="设置页修改问候参数")
                     except Exception as e:
                         logger.warning(f"Failed to refresh heartbeat today schedule: {e}")
-        
-        logger.info("Settings updated successfully")
-        
-        # 返回更新后的设置
-        response = await get_settings()
-        
-        # 添加工作区迁移提示（如果有）
+
+        logger.info(f"User settings updated for user_id={user_id}")
+
+        # 返回更新后的设置（读取最新用户配置）
+        response = await get_settings(user_id=user_id)
+
         if workspace_migration_info:
             response.workspace_migration = workspace_migration_info
-        
+
         return response
         
     except HTTPException:

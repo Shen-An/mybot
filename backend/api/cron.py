@@ -1,4 +1,4 @@
-"""Cron API 端点"""
+"""Cron API 端点 — 多用户支持"""
 
 from typing import List, Optional, Union
 from datetime import datetime, timezone, timedelta
@@ -6,9 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from backend.database import get_db
+from backend.models.cron_job import CronJob
 from backend.modules.cron.service import CronService
+from backend.modules.auth.dependencies import get_current_user_id
 
 router = APIRouter(prefix="/api/cron", tags=["cron"])
 
@@ -224,15 +227,38 @@ class ResetCronSessionResponse(BaseModel):
     deleted_message_count: int = Field(0, description="删除消息数")
 
 
-async def _get_cron_job_or_404(db: AsyncSession, job_id: str):
-    cron_service = CronService(db)
-    job = await cron_service.get_job(job_id)
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Cron job '{job_id}' not found"
+async def _get_cron_job_or_404(db: AsyncSession, job_id: str, user_id: Optional[int] = None):
+    """获取 Cron 任务，可选 user_id 所有权验证"""
+    if user_id is not None:
+        result = await db.execute(
+            select(CronJob).where(
+                CronJob.id == job_id,
+                (CronJob.user_id == user_id) | (CronJob.user_id.is_(None))
+            )
         )
-    return job
+        db_job = result.scalar_one_or_none()
+        if db_job is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Cron job '{job_id}' not found"
+            )
+        cron_service = CronService(db)
+        job = await cron_service.get_job(job_id)
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Cron job '{job_id}' not found"
+            )
+        return job
+    else:
+        cron_service = CronService(db)
+        job = await cron_service.get_job(job_id)
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Cron job '{job_id}' not found"
+            )
+        return job
 
 
 async def _find_cron_session(db: AsyncSession, job):
@@ -277,19 +303,27 @@ async def _find_cron_session(db: AsyncSession, job):
 
 
 @router.get("/jobs", response_model=ListCronJobsResponse)
-async def list_cron_jobs(db: AsyncSession = Depends(get_db)) -> ListCronJobsResponse:
-    """
-    获取所有 Cron 任务列表
-    
-    Args:
-        db: 数据库会话
-        
-    Returns:
-        ListCronJobsResponse: 任务列表
-    """
+async def list_cron_jobs(
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> ListCronJobsResponse:
+    """获取当前用户的 Cron 任务列表（自己的 + 无用户归属的）"""
     try:
+        # 查询属于当前用户的任务 + 无用户归属的任务（兼容旧数据）
+        result = await db.execute(
+            select(CronJob).where(
+                (CronJob.user_id == user_id) | (CronJob.user_id.is_(None))
+            ).order_by(CronJob.created_at.desc())
+        )
+        db_jobs = result.scalars().all()
+
+        # 转换为 CronService 的 job 对象
         cron_service = CronService(db)
-        jobs = await cron_service.list_jobs()
+        jobs = []
+        for db_job in db_jobs:
+            job = await cron_service.get_job(db_job.id)
+            if job:
+                jobs.append(job)
         
         # 转换为响应格式
         jobs_info = [
@@ -330,22 +364,15 @@ async def list_cron_jobs(db: AsyncSession = Depends(get_db)) -> ListCronJobsResp
 @router.post("/jobs/batch", response_model=BatchCreateCronJobsResponse)
 async def batch_create_cron_jobs(
     request: BatchCreateCronJobsRequest,
+    user_id: int = Depends(get_current_user_id),
     cron_service: CronService = Depends(get_cron_service),
+    db: AsyncSession = Depends(get_db),
 ) -> BatchCreateCronJobsResponse:
-    """
-    批量创建 Cron 任务
-    
-    Args:
-        request: 批量创建请求
-        cron_service: Cron 服务（带 scheduler）
-        
-    Returns:
-        BatchCreateCronJobsResponse: 批量创建结果
-    """
+    """批量创建 Cron 任务"""
     try:
         success_jobs = []
         errors = []
-        
+
         for idx, job_req in enumerate(request.jobs):
             try:
                 job = await cron_service.add_job(
@@ -361,6 +388,13 @@ async def batch_create_cron_jobs(
                     retry_delay=job_req.retry_delay,
                     delete_on_success=job_req.delete_on_success,
                 )
+                # 关联 user_id
+                if job:
+                    db_job = await db.execute(select(CronJob).where(CronJob.id == job.id))
+                    db_job_model = db_job.scalar_one_or_none()
+                    if db_job_model:
+                        db_job_model.user_id = user_id
+                        await db.commit()
                 success_jobs.append(job)
             except Exception as e:
                 logger.error(f"Failed to create job {idx} ({job_req.name}): {e}")
@@ -416,47 +450,41 @@ async def batch_create_cron_jobs(
 @router.post("/jobs/batch-delete", response_model=BatchDeleteCronJobsResponse)
 async def batch_delete_cron_jobs(
     request: BatchDeleteCronJobsRequest,
-    cron_service: CronService = Depends(get_cron_service),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ) -> BatchDeleteCronJobsResponse:
-    """
-    批量删除 Cron 任务
-    
-    Args:
-        request: 批量删除请求
-        cron_service: Cron 服务（带 scheduler）
-        
-    Returns:
-        BatchDeleteCronJobsResponse: 批量删除结果
-    """
+    """批量删除 Cron 任务（只能删除自己的）"""
     try:
         deleted_ids = []
         errors = []
-        
+
         for job_id in request.job_ids:
             try:
-                # 禁止删除内置任务
                 if job_id.startswith(BUILTIN_PREFIX):
-                    errors.append({
-                        "job_id": job_id,
-                        "error": "内置系统任务不可删除"
-                    })
+                    errors.append({"job_id": job_id, "error": "内置系统任务不可删除"})
                     continue
-                
+
+                # 验证所有权
+                job_result = await db.execute(
+                    select(CronJob).where(
+                        CronJob.id == job_id,
+                        CronJob.user_id == user_id
+                    )
+                )
+                if job_result.scalar_one_or_none() is None:
+                    errors.append({"job_id": job_id, "error": "任务不存在或无权删除"})
+                    continue
+
+                cron_service = CronService(db)
                 success = await cron_service.delete_job(job_id)
-                
+
                 if success:
                     deleted_ids.append(job_id)
                 else:
-                    errors.append({
-                        "job_id": job_id,
-                        "error": "任务不存在"
-                    })
+                    errors.append({"job_id": job_id, "error": "任务不存在"})
             except Exception as e:
                 logger.error(f"Failed to delete job {job_id}: {e}")
-                errors.append({
-                    "job_id": job_id,
-                    "error": str(e)
-                })
+                errors.append({"job_id": job_id, "error": str(e)})
         
         return BatchDeleteCronJobsResponse(
             success_count=len(deleted_ids),
@@ -478,27 +506,12 @@ async def batch_delete_cron_jobs(
 @router.get("/jobs/{job_id}", response_model=CronJobDetailResponse)
 async def get_cron_job_detail(
     job_id: str,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> CronJobDetailResponse:
-    """
-    获取 Cron 任务详细信息（包括完整的响应和错误）
-    
-    Args:
-        job_id: 任务 ID
-        db: 数据库会话
-        
-    Returns:
-        CronJobDetailResponse: 任务详细信息
-    """
+    """获取 Cron 任务详细信息"""
     try:
-        cron_service = CronService(db)
-        job = await cron_service.get_job(job_id)
-        
-        if not job:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Cron job '{job_id}' not found"
-            )
+        job = await _get_cron_job_or_404(db, job_id, user_id=user_id)
         
         return CronJobDetailResponse(
             job=CronJobInfo(
@@ -540,13 +553,14 @@ async def get_cron_job_detail(
 async def get_cron_job_messages(
     job_id: str,
     limit: int = 20,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> CronJobMessagesResponse:
     """获取 Cron 任务关联会话的消息。"""
     try:
         from backend.modules.session.manager import SessionManager
 
-        job = await _get_cron_job_or_404(db, job_id)
+        job = await _get_cron_job_or_404(db, job_id, user_id=user_id)
         session = await _find_cron_session(db, job)
 
         if not session:
@@ -590,13 +604,14 @@ async def get_cron_job_messages(
 async def cleanup_cron_job_session(
     job_id: str,
     request: CleanupCronSessionRequest,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> CleanupCronSessionResponse:
     """清理 Cron 任务关联会话，保留最近 N 条消息。"""
     try:
         from backend.modules.session.manager import SessionManager
 
-        job = await _get_cron_job_or_404(db, job_id)
+        job = await _get_cron_job_or_404(db, job_id, user_id=user_id)
         session = await _find_cron_session(db, job)
 
         if not session:
@@ -677,13 +692,14 @@ async def cleanup_cron_job_session(
 @router.post("/jobs/{job_id}/session/reset", response_model=ResetCronSessionResponse)
 async def reset_cron_job_session(
     job_id: str,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> ResetCronSessionResponse:
     """重置 Cron 任务关联会话。"""
     try:
         from backend.modules.session.manager import SessionManager
 
-        job = await _get_cron_job_or_404(db, job_id)
+        job = await _get_cron_job_or_404(db, job_id, user_id=user_id)
         session = await _find_cron_session(db, job)
 
         if not session:
@@ -721,18 +737,11 @@ async def reset_cron_job_session(
 @router.post("/jobs", response_model=CronJobResponse)
 async def create_cron_job(
     request: CreateCronJobRequest,
+    user_id: int = Depends(get_current_user_id),
     cron_service: CronService = Depends(get_cron_service),
+    db: AsyncSession = Depends(get_db),
 ) -> CronJobResponse:
-    """
-    创建新的 Cron 任务
-    
-    Args:
-        request: 创建任务请求
-        cron_service: Cron 服务（带 scheduler）
-        
-    Returns:
-        CronJobResponse: 创建的任务
-    """
+    """创建新的 Cron 任务"""
     try:
         job = await cron_service.add_job(
             name=request.name,
@@ -747,6 +756,14 @@ async def create_cron_job(
             retry_delay=request.retry_delay,
             delete_on_success=request.delete_on_success,
         )
+
+        # 关联 user_id
+        if job:
+            db_job = await db.execute(select(CronJob).where(CronJob.id == job.id))
+            db_job_model = db_job.scalar_one_or_none()
+            if db_job_model:
+                db_job_model.user_id = user_id
+                await db.commit()
         
         return CronJobResponse(
             job=CronJobInfo(
@@ -791,28 +808,32 @@ async def create_cron_job(
 async def update_cron_job(
     job_id: str,
     request: UpdateCronJobRequest,
+    user_id: int = Depends(get_current_user_id),
     cron_service: CronService = Depends(get_cron_service),
+    db: AsyncSession = Depends(get_db),
 ) -> CronJobResponse:
-    """
-    更新 Cron 任务
-    
-    Args:
-        job_id: 任务 ID
-        request: 更新任务请求
-        cron_service: Cron 服务（带 scheduler）
-        
-    Returns:
-        CronJobResponse: 更新后的任务
-    """
+    """更新 Cron 任务（只能修改自己的）"""
     try:
-        # 内置任务只允许修改 enabled/channel/account_id/chat_id/deliver_response/schedule
+        # 验证所有权
+        job_result = await db.execute(
+            select(CronJob).where(
+                CronJob.id == job_id,
+                CronJob.user_id == user_id
+            )
+        )
+        if job_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权修改此任务"
+            )
+
         if job_id.startswith(BUILTIN_PREFIX):
             if request.name is not None or request.message is not None:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="内置系统任务不可修改名称和消息内容"
                 )
-        
+
         job = await cron_service.update_job(
             job_id=job_id,
             name=request.name,
@@ -878,26 +899,31 @@ async def update_cron_job(
 @router.delete("/jobs/{job_id}", response_model=DeleteCronJobResponse)
 async def delete_cron_job(
     job_id: str,
-    cron_service: CronService = Depends(get_cron_service),
+    user_id: int = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ) -> DeleteCronJobResponse:
-    """
-    删除 Cron 任务
-    
-    Args:
-        job_id: 任务 ID
-        cron_service: Cron 服务（带 scheduler）
-        
-    Returns:
-        DeleteCronJobResponse: 删除结果
-    """
+    """删除 Cron 任务（只能删除自己的）"""
     try:
-        # 禁止删除内置任务
         if job_id.startswith(BUILTIN_PREFIX):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="内置系统任务不可删除"
             )
-        
+
+        # 验证所有权
+        job_result = await db.execute(
+            select(CronJob).where(
+                CronJob.id == job_id,
+                CronJob.user_id == user_id
+            )
+        )
+        if job_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="任务不存在或无权删除"
+            )
+
+        cron_service = CronService(db)
         success = await cron_service.delete_job(job_id)
         
         if not success:
@@ -921,34 +947,37 @@ async def delete_cron_job(
 @router.post("/jobs/{job_id}/run", response_model=ExecuteCronJobResponse)
 async def trigger_cron_job(
     job_id: str,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> ExecuteCronJobResponse:
-    """
-    手动触发 Cron 任务立即执行（异步，立即返回）
-    
-    Args:
-        job_id: 任务 ID
-        db: 数据库会话
-        
-    Returns:
-        ExecuteCronJobResponse: 提交结果
-    """
+    """手动触发 Cron 任务立即执行"""
     try:
         from backend.app import app
         import asyncio
-        
-        # 获取执行器
+
         executor = getattr(app.state, 'cron_executor', None)
         if not executor:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Cron executor not available"
             )
-        
-        # 获取任务
+
+        # 验证所有权
+        job_result = await db.execute(
+            select(CronJob).where(
+                CronJob.id == job_id,
+                CronJob.user_id == user_id
+            )
+        )
+        if job_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="任务不存在或无权执行"
+            )
+
         cron_service = CronService(db)
         job = await cron_service.get_job(job_id)
-        
+
         if not job:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1039,72 +1068,27 @@ async def trigger_cron_job(
 @router.post("/validate", response_model=ValidateCronResponse)
 async def validate_cron_schedule(
     request: ValidateCronRequest,
+    user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> ValidateCronResponse:
     """
     验证 Cron 表达式并返回描述和下次运行时间
-    
-    Args:
-        request: 验证请求
-        db: 数据库会话
-        
-    Returns:
-        ValidateCronResponse: 验证结果
     """
     try:
         cron_service = CronService(db)
-        
-        # 验证表达式
+
         valid = cron_service.validate_schedule(request.schedule)
         if not valid:
             return ValidateCronResponse(valid=False)
-        
-        # 获取描述和下次运行时间
+
         description = cron_service.get_schedule_description(request.schedule)
         next_run = cron_service.calculate_next_run(request.schedule)
-        
+
         return ValidateCronResponse(
             valid=True,
             description=description,
             next_run=_to_shanghai_iso(next_run),
         )
-        
-    except Exception as e:
-        return ValidateCronResponse(valid=False, description=str(e))
 
-
-@router.post("/validate", response_model=ValidateCronResponse)
-async def validate_cron_schedule(
-    request: ValidateCronRequest,
-    db: AsyncSession = Depends(get_db),
-) -> ValidateCronResponse:
-    """
-    验证 Cron 表达式并返回描述和下次运行时间
-    
-    Args:
-        request: 验证请求
-        db: 数据库会话
-        
-    Returns:
-        ValidateCronResponse: 验证结果
-    """
-    try:
-        cron_service = CronService(db)
-        
-        # 验证表达式
-        valid = cron_service.validate_schedule(request.schedule)
-        if not valid:
-            return ValidateCronResponse(valid=False)
-        
-        # 获取描述和下次运行时间
-        description = cron_service.get_schedule_description(request.schedule)
-        next_run = cron_service.calculate_next_run(request.schedule)
-        
-        return ValidateCronResponse(
-            valid=True,
-            description=description,
-            next_run=_to_shanghai_iso(next_run),
-        )
-        
     except Exception as e:
         return ValidateCronResponse(valid=False, description=str(e))

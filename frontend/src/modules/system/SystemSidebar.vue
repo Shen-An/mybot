@@ -151,16 +151,19 @@
             </div>
           </div>
 
-          <!-- 用户信息 & 注销（仅远程登录时显示） -->
-          <div v-if="authInfo && !authInfo.is_local && authInfo.authenticated" class="auth-section">
+          <!-- 用户信息 & 注销（认证后显示） -->
+          <div v-if="authInfo && authInfo.authenticated" class="auth-section">
             <div class="auth-divider" />
             <div class="auth-user">
               <div class="auth-user-icon">
                 <component :is="UserIcon" :size="16" />
               </div>
               <div class="auth-user-info">
-                <span class="auth-user-label">{{ $t('sidebar.remoteAccess') || '远程访问' }}</span>
-                <span class="auth-user-status">{{ $t('sidebar.authenticated') || '已认证' }}</span>
+                <span class="auth-user-label">{{ authInfo.username || '用户' }}</span>
+                <span class="auth-user-status">
+                  <span class="role-badge" :class="authInfo.role">{{ roleLabel(authInfo.role) }}</span>
+                  <span v-if="!authInfo.is_local" class="remote-badge">{{ $t('sidebar.remoteAccess') || '远程访问' }}</span>
+                </span>
               </div>
             </div>
             <button class="logout-btn" @click="handleLogout">
@@ -215,7 +218,20 @@ const info = ref<SystemInfo>({
   uptime_start: '',
 })
 
-const authInfo = ref<{ is_local: boolean; auth_enabled: boolean; authenticated: boolean } | null>(null)
+const authInfo = ref<{
+  is_local: boolean
+  auth_enabled: boolean
+  authenticated: boolean
+  user_id?: number
+  username?: string
+  role?: string
+  remote_access_enabled?: boolean
+} | null>(null)
+
+function roleLabel(role?: string): string {
+  const labels: Record<string, string> = { admin: '管理员', operator: '操作员', user: '用户' }
+  return labels[role || 'user'] || '用户'
+}
 
 async function fetchInfo() {
   loading.value = true

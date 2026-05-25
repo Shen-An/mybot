@@ -331,7 +331,10 @@ class ConnectionManager:
             connection_id = str(uuid.uuid4())
 
         async with self._lock:
-            await websocket.accept()
+            # 允许外部提前 accept（减少客户端等待时间）
+            from starlette.websockets import WebSocketState
+            if websocket.client_state == WebSocketState.CONNECTING:
+                await websocket.accept()
             self._connections[connection_id] = websocket
             logger.debug(f"WebSocket 连接已建立: {connection_id}")
 

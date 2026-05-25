@@ -111,6 +111,63 @@ _SCHEMA_COMPATIBILITY_MIGRATIONS = (
                 name="account_id",
                 ddl="account_id VARCHAR",
             ),
+            CompatibilityColumnMigration(
+                name="user_id",
+                ddl="user_id INTEGER REFERENCES users(id)",
+            ),
+        ),
+    ),
+    CompatibilityTableMigration(
+        table_name="tasks",
+        columns=(
+            CompatibilityColumnMigration(
+                name="user_id",
+                ddl="user_id INTEGER REFERENCES users(id)",
+            ),
+        ),
+    ),
+    CompatibilityTableMigration(
+        table_name="tool_conversations",
+        columns=(
+            CompatibilityColumnMigration(
+                name="user_id",
+                ddl="user_id INTEGER REFERENCES users(id)",
+            ),
+        ),
+    ),
+    CompatibilityTableMigration(
+        table_name="agent_teams",
+        columns=(
+            CompatibilityColumnMigration(
+                name="user_id",
+                ddl="user_id INTEGER REFERENCES users(id)",
+            ),
+            CompatibilityColumnMigration(
+                name="is_shared",
+                ddl="is_shared BOOLEAN DEFAULT 0",
+            ),
+        ),
+    ),
+    CompatibilityTableMigration(
+        table_name="personalities",
+        columns=(
+            CompatibilityColumnMigration(
+                name="owner_id",
+                ddl="owner_id INTEGER REFERENCES users(id)",
+            ),
+            CompatibilityColumnMigration(
+                name="is_shared",
+                ddl="is_shared BOOLEAN DEFAULT 0",
+            ),
+        ),
+    ),
+    CompatibilityTableMigration(
+        table_name="sessions",
+        columns=(
+            CompatibilityColumnMigration(
+                name="user_id",
+                ddl="user_id INTEGER REFERENCES users(id)",
+            ),
         ),
     ),
 )
@@ -143,7 +200,7 @@ SessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 
-# 会话工厂
+# 异步会话工厂
 AsyncSessionLocal = async_sessionmaker(
     engine,
     class_=AsyncSession,
@@ -205,12 +262,12 @@ def _apply_schema_compatibility_migrations(
 async def init_db() -> None:
     """初始化数据库"""
     # 导入所有模型以确保表被创建
-    from backend.models import AgentTeam, CronJob, Message, Personality, Session, Setting, Task, ToolConversation  # noqa: F401
+    from backend.models import AgentTeam, AuthSession, CronJob, Message, Personality, Session, Setting, Task, ToolConversation, User  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_apply_schema_compatibility_migrations)
-    
+
     # 初始化性格数据
     await init_personalities()
 

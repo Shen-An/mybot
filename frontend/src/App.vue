@@ -12,11 +12,12 @@ import { useRoute, useRouter } from 'vue-router'
 import Toast from '@/components/ui/Toast.vue'
 import GlobalConfirmDialog from '@/components/GlobalConfirmDialog.vue'
 import { useTheme } from '@/composables/useTheme'
-import { authAPI } from '@/api'
+import { useAuthStore } from '@/store/auth'
 
 const router = useRouter()
 const route = useRoute()
 const { initTheme } = useTheme()
+const authStore = useAuthStore()
 
 // 安全警告标志：远程访问已开启但未设置密码
 const showSecurityWarning = ref(false)
@@ -24,22 +25,20 @@ provide('showSecurityWarning', showSecurityWarning)
 
 onMounted(async () => {
   initTheme()
+
+  // 初始化认证状态
+  await authStore.init()
+
   if (route.path !== '/') {
     return
   }
 
   // 远程访问认证检查
-  try {
-    const data = await authAPI.status()
-    if (!data.is_local && !data.authenticated) {
+  if (!authStore.isLoading) {
+    if (!authStore.isAuthenticated && route.path !== '/login' && !route.path.startsWith('/setup/')) {
       // 远程访问且未认证 → 跳转登录
       router.replace('/login')
-    } else if (data.remote_access_enabled && !data.auth_enabled) {
-      // 远程访问已开启但未设置密码 → 显示安全警告（不阻塞）
-      showSecurityWarning.value = true
     }
-  } catch {
-    // auth 接口不可用时不阻塞（可能是旧版本后端）
   }
 })
 </script>
