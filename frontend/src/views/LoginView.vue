@@ -25,7 +25,7 @@
             id="username"
             v-model="username"
             type="text"
-            :placeholder="isSetup ? '设置管理员账号' : '请输入账号'"
+            :placeholder="isSetup ? '设置管理员账号' : (isRegister ? '请设置账号' : '请输入账号')"
             autocomplete="username"
             required
           />
@@ -37,13 +37,13 @@
             id="password"
             v-model="password"
             type="password"
-            :placeholder="isSetup ? '设置密码' : '请输入密码'"
-            :autocomplete="isSetup ? 'new-password' : 'current-password'"
+            :placeholder="isSetup ? '设置密码' : (isRegister ? '请设置密码' : '请输入密码')"
+            :autocomplete="isSetup ? 'new-password' : (isRegister ? 'new-password' : 'current-password')"
             required
           />
         </div>
 
-        <div v-if="isSetup" class="field">
+        <div v-if="isSetup || isRegister" class="field">
           <label for="confirmPassword">确认密码</label>
           <input
             id="confirmPassword"
@@ -55,8 +55,20 @@
           />
         </div>
 
-        <!-- Password requirements (always visible in setup mode) -->
-        <div v-if="isSetup" class="password-rules">
+        <!-- Display name (register only) -->
+        <div v-if="isRegister" class="field">
+          <label for="displayName">显示名（可选）</label>
+          <input
+            id="displayName"
+            v-model="displayName"
+            type="text"
+            placeholder="用于 AI 称呼你"
+            autocomplete="name"
+          />
+        </div>
+
+        <!-- Password requirements -->
+        <div v-if="isSetup || isRegister" class="password-rules">
           密码要求：至少 8 位，必须同时包含大写字母、小写字母和数字
         </div>
 
@@ -69,14 +81,22 @@
 
         <button type="submit" class="submit-btn" :disabled="loading || needsLocalSetup">
           <span v-if="loading" class="spinner"></span>
-          {{ loading ? '请稍候...' : (isSetup ? '设置并登录' : '登录') }}
+          {{ loading ? '请稍候...' : submitButtonText }}
         </button>
       </form>
 
       <!-- Footer -->
       <div class="login-footer">
-        <span v-if="!isSetup">密码要求：至少 8 位，包含大写字母、小写字母和数字</span>
-        <span v-else>设置完成后将自动登录</span>
+        <span v-if="isSetup">设置完成后将自动登录</span>
+        <template v-else>
+          <span class="footer-hint">密码要求：至少 8 位，包含大写字母、小写字母和数字</span>
+          <span
+            class="register-link"
+            @click="isRegister ? switchToLogin() : switchToRegister()"
+          >
+            {{ isRegister ? '已有账号？去登录' : '没有账号？立即注册' }}
+          </span>
+        </template>
       </div>
     </div>
   </div>
@@ -85,15 +105,19 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import axios from 'axios'
+import { authAPI } from '@/api/endpoints'
+import { useAuthStore } from '@/store/auth'
 
 const router = useRouter()
 const route = useRoute()
+const authStore = useAuthStore()
 
 const isSetup = ref(false)
+const isRegister = ref(false)
 const username = ref('')
 const password = ref('')
 const confirmPassword = ref('')
+const displayName = ref('')
 const errorMsg = ref('')
 const loading = ref(false)
 const needsLocalSetup = ref(false)
@@ -112,18 +136,38 @@ const hintText = computed(() => {
   if (needsLocalSetup.value) {
     return setupSecret.value ? '初始化入口不可用' : '远程初始化需要专用入口'
   }
-  return isSetup.value ? '首次初始化，请设置管理员账号和密码' : '远程访问需要身份验证'
+  if (isSetup.value) {
+    return '首次初始化，请设置管理员账号和密码'
+  }
+  return isRegister.value ? '注册新账号，开始使用 CountBot' : '远程访问需要身份验证'
+})
+
+const submitButtonText = computed(() => {
+  if (isSetup.value) return '设置并登录'
+  return isRegister.value ? '注册并登录' : '登录'
 })
 
 function getSetupHeaders() {
   return setupSecret.value ? { 'X-Setup-Secret': setupSecret.value } : undefined
 }
 
+function switchToRegister() {
+  isRegister.value = true
+  errorMsg.value = ''
+  confirmPassword.value = ''
+  displayName.value = ''
+}
+
+function switchToLogin() {
+  isRegister.value = false
+  errorMsg.value = ''
+  confirmPassword.value = ''
+  displayName.value = ''
+}
+
 onMounted(async () => {
   try {
-    const { data } = await axios.get('/api/auth/status', {
-      headers: getSetupHeaders(),
-    })
+    const data = await authAPI.status()
     if (data.authenticated) {
       router.replace('/')
       return
@@ -149,31 +193,37 @@ async function handleSubmit() {
         errorMsg.value = '两次输入的密码不一致'
         return
       }
-      const { data } = await axios.post(
-        '/api/auth/setup',
-        {
-          username: username.value,
-          password: password.value,
-        },
-        {
-          headers: getSetupHeaders(),
-        }
-      )
-      if (data.token) {
-        localStorage.setItem('CountBot_token', data.token)
+      const resp = await authAPI.setup({ username: username.value, password: password.value }, setupSecret.value)
+      if (resp.token) {
+        localStorage.setItem('CountBot_token', resp.token)
       }
-    } else {
-      const { data } = await axios.post('/api/auth/login', {
+    } else if (isRegister.value) {
+      if (password.value !== confirmPassword.value) {
+        errorMsg.value = '两次输入的密码不一致'
+        return
+      }
+      const resp = await authAPI.register({
         username: username.value,
         password: password.value,
+        display_name: displayName.value || undefined,
       })
-      if (data.token) {
-        localStorage.setItem('CountBot_token', data.token)
+      if (resp.token) {
+        localStorage.setItem('CountBot_token', resp.token)
       }
+    } else {
+      const resp = await authAPI.login({ username: username.value, password: password.value })
+      if (resp.token) {
+        localStorage.setItem('CountBot_token', resp.token)
+      }
+    }
+    // 从服务端刷新认证状态（通过 cookie）
+    await authStore.init()
+    if (!authStore.isAuthenticated) {
+      throw new Error('认证状态验证失败')
     }
     router.replace('/')
   } catch (err: any) {
-    const detail = err?.response?.data?.detail
+    const detail = err?.response?.data?.detail || err?.message
     errorMsg.value = detail || '操作失败，请重试'
   } finally {
     loading.value = false
@@ -377,14 +427,6 @@ async function handleSubmit() {
   to { transform: rotate(360deg); }
 }
 
-/* ===== Footer ===== */
-.login-footer {
-  margin-top: 24px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-tertiary, #94a3b8);
-}
-
 /* ===== Dark theme ===== */
 [data-theme="dark"] .login-page {
   background: radial-gradient(circle at top, rgba(127, 181, 214, 0.08), transparent 34%),
@@ -456,7 +498,51 @@ async function handleSubmit() {
   box-shadow: 0 22px 46px rgba(2, 8, 20, 0.38);
 }
 
+/* ===== Footer ===== */
+.login-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 28px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-tertiary, #94a3b8);
+}
+
+.footer-hint {
+  color: var(--text-tertiary, #94a3b8);
+  font-size: 11px;
+  text-align: left;
+}
+
+.register-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-primary, #3b82f6);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.15s;
+  line-height: 1.4;
+  align-self: flex-end;
+}
+
+.register-link:hover {
+  color: var(--color-primary-hover, #2563eb);
+  text-decoration: underline;
+}
+
 [data-theme="dark"] .login-footer {
   color: var(--text-tertiary, #6f8198);
+}
+
+[data-theme="dark"] .register-link {
+  color: #7fb5d6;
+}
+
+[data-theme="dark"] .register-link:hover {
+  color: #94c4e0;
 }
 </style>

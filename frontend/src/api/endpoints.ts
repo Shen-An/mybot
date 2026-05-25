@@ -613,20 +613,80 @@ export const healthAPI = {
  * Auth API
  */
 export const authAPI = {
-    status: (): Promise<{ is_local: boolean; auth_enabled: boolean; authenticated: boolean; remote_access_enabled: boolean }> =>
+    status: (): Promise<{
+        is_local: boolean
+        auth_enabled: boolean
+        authenticated: boolean
+        user_id?: number
+        username?: string
+        role?: string
+        display_name?: string
+        avatar?: string
+        remote_access_enabled: boolean
+    }> =>
         apiClient.get('/auth/status'),
 
-    setup: (data: { username: string; password: string }): Promise<{ success: boolean; token: string }> =>
-        apiClient.post('/auth/setup', data),
+    setup: (data: { username: string; password: string }, setupSecret?: string): Promise<{ success: boolean; token: string; user_id: number; username: string; role: string; display_name?: string }> =>
+        apiClient.post('/auth/setup', data, { headers: setupSecret ? { 'X-Setup-Secret': setupSecret } : {} }),
 
-    login: (data: { username: string; password: string }): Promise<{ success: boolean; token: string }> =>
+    register: (data: { username: string; password: string; display_name?: string }): Promise<{ success: boolean; token: string; user_id: number; username: string; role: string; display_name?: string }> =>
+        apiClient.post('/auth/register', data),
+
+    login: (data: { username: string; password: string }): Promise<{ success: boolean; token: string; user_id: number; username: string; role: string; display_name?: string }> =>
         apiClient.post('/auth/login', data),
 
     logout: (): Promise<{ success: boolean }> =>
         apiClient.post('/auth/logout'),
 
+    me: (): Promise<{
+        user_id: number
+        username: string
+        role: string
+        display_name?: string
+        avatar?: string
+        is_active: boolean
+        created_at?: string
+        last_login_at?: string
+    }> =>
+        apiClient.get('/auth/me'),
+
     changePassword: (data: { old_password: string; new_password: string }): Promise<{ success: boolean }> =>
         apiClient.post('/auth/change-password', data),
+
+    // User Management (admin only)
+    createUser: (data: { username: string; password: string; role?: string; display_name?: string }): Promise<{ success: boolean; user_id: number; username: string; role: string }> =>
+        apiClient.post('/auth/users', data),
+
+    listUsers: (): Promise<Array<{
+        id: number
+        username: string
+        role: string
+        display_name?: string
+        avatar?: string
+        is_active: boolean
+        created_at?: string
+        last_login_at?: string
+    }>> =>
+        apiClient.get('/auth/users'),
+
+    updateUser: (userId: number, data: { username?: string; role?: string; display_name?: string; is_active?: boolean }): Promise<{ success: boolean; user_id: number }> =>
+        apiClient.put(`/auth/users/${userId}`, data),
+
+    deleteUser: (userId: number): Promise<{ success: boolean }> =>
+        apiClient.delete(`/auth/users/${userId}`),
+
+    // User Switch (sudo mode, admin only)
+    switchPost: (targetUserId: number): Promise<{
+        success: boolean
+        switch_token: string
+        target_user_id: number
+        target_username: string
+        target_role: string
+    }> =>
+        apiClient.post('/auth/switch', null, { params: { target_user_id: targetUserId } }),
+
+    switchDelete: (): Promise<{ success: boolean }> =>
+        apiClient.delete('/auth/switch'),
 }
 
 /**
