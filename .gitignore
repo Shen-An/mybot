@@ -78,7 +78,6 @@ yarn-error.log*
 # frontend/tsconfig.node.json
 # frontend/vite.config.ts
 frontend/.vite/
-frontend/dist/test_*.html
 
 # ── 临时文件 ────────────────────────────────
 data/temp/
@@ -91,7 +90,6 @@ temp/
 
 # ── 构建产物 ────────────────────────────────
 dist/
-!frontend/dist/
 *.spec
 
 # ── Git 提交辅助文件 ──────────────────────
