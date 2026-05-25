@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Glob", 
+      "Grep",
+      "Bash(npm *)",
+      "Bash(git *)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(curl * | bash)",
+      "Read(./.env*)",
+      "Read(./**/secrets/**)"
+    ]
+  },
+  "security": {
+    "sandbox": true,
+    "prompt_injection_protection": true
+  }
+}
