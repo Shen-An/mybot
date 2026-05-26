@@ -10,10 +10,65 @@
 
   <p>
     <a href="https://github.com/countbot-ai/countbot/stargazers"><img src="https://img.shields.io/github/stars/countbot-ai/countbot?style=social" alt="GitHub stars"></a>
-    <a href="https://github.com/countbot-ai/countbot"><img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python"></a>
+    <a href="https://github.com/countbot-ai/countbot"><img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
   </p>
 </div>
+
+---
+
+## About This Project
+
+This project is a **fork** of [CountBot](https://github.com/countbot-ai/CountBot), an excellent open-source AI agent framework. It builds on the original project with several feature enhancements and optimizations.
+
+> **Credit to the original author**: CountBot is a well-designed open-source project that provides a complete, production-ready AI agent framework for Chinese users. All modifications in this fork are built on the original author's open-source code. We deeply appreciate the original author's hard work and ongoing maintenance. Please visit the [original repository](https://github.com/countbot-ai/CountBot) and drop a ⭐ to show your support!
+
+---
+
+## Major Changes in This Fork
+
+### 🔐 Multi-Tenant Authentication System
+
+- **Multi-user support**: Upgraded from single-user to a multi-user architecture with `admin` / `operator` / `user` roles
+- **PBKDF2 password hashing** + HMAC session tokens, with rate-limited login (5 attempts / 15 min → 15 min lockout)
+- **Cookie + Bearer Token dual authentication**, supporting both `CountBot_token` cookie and Bearer header
+- **Admin sudo mode**: `POST /api/auth/switch?target_user_id=N` to switch user identity, `get_effective_user_id()` prevents privilege escalation
+- **Remote first-time setup entry** `/setup/{random_secret}` with configurable TTL (default 30 min), auto-invalidated after successful setup
+- **WebSocket multi-user auth**: Cookie or Bearer token; local connections auto-assign the first admin as default user
+
+### 🏢 Multi-Tenant Channel Isolation
+
+- **`UserChannelConfig` table**: Each row records `user_id` + `channel` + `account_id` + `config_json` + `is_enabled`
+- **ChannelManager user isolation**: Each channel instance is bound to `_user_id`, with key format `f"{channel}:{account_id}:{user_id}"`
+- **User lifecycle**: `start_user_channels(user_id)` on login, `stop_user_channels(user_id)` on logout
+- **Duplicate physical bot detection**: `async_init()` checks unique fields like `login_bot_id` across users and skips redundant instances
+- **Outbound routing**: Routes precisely to the correct user's instance based on `msg.metadata["user_id"]` + `account_id`
+- **User context propagation**: `ChannelMessageHandler` → `set_current_user_context()` injects user context via `contextvars` into non-HTTP layers (WebSocket, channel handlers, tools)
+- **Hot-reload**: Channel config changes → `_restart_channel_manager_if_needed()` → full reload
+
+### 🖥️ Frontend Enhancements
+
+- **Registration on login page**: New users can self-register
+- **KaTeX LaTeX math rendering**: Supports `$...$` and `$$...$$` math formulas
+- **Settings page icon differentiation**: `users` tab uses `UsersIcon` (multiple people), `persona` tab uses `PersonIcon` (single person)
+- **Frontend `dist/` no longer committed**: Added to `.gitignore`, CI/CD builds instead
+- **UserManagement role label optimization**: "User" → "Regular User" for clearer distinction
+
+### 🛠️ Tool System Improvements
+
+- **BM25 skill routing optimization**: Improved skill search efficiency
+- **ExecTool auto-detects CountBot conda env**: Subprocess Python automatically uses the project's conda environment
+- **Enums replace hardcoded strings**: `memory_tool` + `workflow_tool` use enums to prevent string errors
+
+### 📡 WebUI Refresh Notifications for Channel Messages
+
+- **`history_updated` + `sessions_updated` event push**: Channel message backfill/mirroring now actively notifies WebUI to refresh, fixing the issue where channel messages didn't appear in WebUI
+- **`session.user_id` auto-sync**: Channel sessions automatically set `user_id` to ensure WebUI session visibility
+
+### 📦 Build Fixes
+
+- **PyInstaller hidden-imports completed**: Fixed missing modules in compiled builds
+- **Wiki module dependency fixes**: Fixed 500 errors in compiled Wiki builds
 
 ---
 
@@ -33,108 +88,6 @@ You can think of CountBot as both a framework and a hub:
 In one sentence: **CountBot is an AI agent framework and runtime hub that connects models, channels, teams, and tools.**
 
 CountBot was born from natural language. Its vision is not to require more people to learn complex configuration and programming before they can use AI, but to let ordinary users interact with AI directly through natural language to retrieve information, generate content, break down tasks, call tools, orchestrate workflows, and even build their own assistants, team collaboration flows, and automation systems.
-
----
-
-## Latest Updates
-
-- **v0.9.0**
-  - Added MCP client module with multi-server connections, health checks, and tool discovery. Disabled by default, designed for advanced users with personalized needs
-  - Added Wiki knowledge base module with BM25 full-text search, batch retrieval, relevance filtering, and LRU cache
-  - New MCP and Wiki management panels with component modularization and i18n support
-  - New WebSocket status broadcast module for real-time MCP connection state sync to frontend
-  - Improved context management and heartbeat mechanism, simplified greeting logic to reduce LLM calls
-  - Refined tool registration and initialization flow for better startup consistency
-  - Added API Key rotation with automatic failover and multi-key support
-  - Improved send_media tool compatibility for web mode, supports image preview and file download in Web UI
-  - Optimized model preset interface and updated build artifacts
-  - Release notes: [https://654321.ai/docs/releases/v0.9.0](https://654321.ai/docs/releases/v0.9.0)
-
-- **v0.8.3**
-  - Improved model preset interface and updated build artifacts
-  - Release notes: [https://654321.ai/docs/releases/v0.8.3](https://654321.ai/docs/releases/v0.8.3)
-
-- **v0.8.2**
-  - Added API Key rotation and failover capability with automatic key switching on 401/429 errors
-  - Improved send_media tool web-mode compatibility
-  - Release notes: [https://654321.ai/docs/releases/v0.8.2](https://654321.ai/docs/releases/v0.8.2)
-
-- **v0.8.1**
-  - Fixed DeepSeek multi-turn reasoning_content loss issue
-  - Added knowledge base module with BM25 search
-  - Updated documentation and build artifacts
-  - Release notes: [https://654321.ai/docs/releases/v0.8.1](https://654321.ai/docs/releases/v0.8.1)
-
-- **v0.8.0**
-  - Addressed multiple issues and user-reported problems, fixing a batch of known bugs in high-frequency usage scenarios
-  - Fully optimized the frontend interface and interaction experience, improving overall usability and operation flow
-  - Continued optimizing the end-to-end response pipeline to improve the accuracy, timeliness, and overall stability of AI replies
-  - Refactored conversation context maintenance with short-context summary caching, overflow history summarization, and full-session memory persistence
-  - Strengthened multi-channel reliability, especially for WeChat, WeCom, and Lark message handling, deduplication, and streaming delivery control
-  - Optimized heartbeat and scheduled execution logic to avoid counting messages before successful delivery and to support schedule refresh after config changes
-  - Improved reasoning switches and runtime config resolution with provider-specific thinking field mapping and persona merge rules
-  - Unified bind host and port environment variables and added documentation for `COUNTBOT_HOST` / `COUNTBOT_PORT`
-  - Release notes: [https://654321.ai/docs/releases/v0.8.0](https://654321.ai/docs/releases/v0.8.0)
-
-- **v0.7.0**
-  - Addressed multiple issue reports, fixed a batch of known bugs, and improved overall stability
-  - Added file upload and processing flows to the WEBUI, improved Mermaid rendering, and made chart presentation more user-friendly
-  - Optimized frontend pages and interaction flows so everyday operations around skills, configuration, and tools feel smoother
-  - Optimized the tool invocation chain and context organization, significantly reducing token usage compared with previous versions
-  - Added a model thinking control switch so you can adjust reasoning intensity by scenario and get faster perceived responses
-  - Added `find-skills` with full Tencent Cloud SkillsHub integration, enabling conversational search, install, enable, disable, and delete for skills
-  - Added `ima-knowledge-base` and `ima-notes` with full IMA knowledge-base and note capabilities, including search, upload, web import, reading, creation, and append
-  - Release notes: [https://654321.ai/docs/releases/v0.7.0](https://654321.ai/docs/releases/v0.7.0)
-
-- **v0.6.0**
-  - Added WeChat ClawBot integration with support for binding multiple accounts
-  - Added external coding tool integration for Claude, Codex, and OpenCode, which can either be called by the LLM as tools or act as agents connected to IM channels
-  - Added the secure first-time remote initialization entry `/setup/<random>`
-  - Added `REMOTE_SETUP_SECRET_TTL_MINUTES` so the validity period of the remote setup entry can be controlled
-  - Strengthened remote authentication boundaries, covering `/api/*` and `/ws/chat`
-  - Release notes: [https://654321.ai/docs/releases/v0.6.0](https://654321.ai/docs/releases/v0.6.0)
-
-- **v0.5.0**
-  - Agent Teams became a first-class capability, supporting multi-role collaboration, context handoff, and team-level orchestration
-  - The configuration system evolved from session-level configuration to role-level, team-level, and multi-bot coordination
-  - The channel system was further strengthened to support more enterprise and social entry points
-  - Frontend panels for chat, configuration, skills, teams, and tools were upgraded as a whole
-  - Release notes: [https://654321.ai/docs/releases/v0.5.0](https://654321.ai/docs/releases/v0.5.0)
-
-- **v0.4.0**
-  - Introduced session-level configuration so different sessions can use different models and prompts
-  - Expanded channel support for Lark, WeCom, Weibo, Xiaozhi AI, and more
-  - Improved multi-agent collaboration and added usage entry points such as `/help`
-  - Release notes: [https://654321.ai/docs/releases/v0.4.0](https://654321.ai/docs/releases/v0.4.0)
-
-- **v0.3.0**
-  - Multi-agent collaboration modes (`pipeline` / `graph` / `council`) were first systematized
-  - Scheduled tasks, skill configuration, and workspace management were significantly enhanced
-  - Release notes: [https://654321.ai/docs/releases/v0.3.0](https://654321.ai/docs/releases/v0.3.0)
-
-- **v0.2.0 · 2026-02-26**
-  - Focused on bug fixes, interaction improvements, and cleanup of the build workflow
-  - Pushed CountBot from "basically runnable" toward "stable and ready to iterate"
-
-- **Official Open Source Release · 2026-02-21**
-  - CountBot was open-sourced for the first time, including the base framework, startup scripts, agent core, channel system, tool system, skill system, and foundational frontend capabilities
-  - Public iteration has continued from that day onward
-
----
-
-## Why CountBot
-
-CountBot starts from the broader trend of software being driven by natural language, and aims to let AI truly land in real tasks and everyday work.
-
-Software development and software usage are changing:
-1. Interaction between people and software is moving from complex commands and code toward natural language.
-2. Tools and systems are moving from standardized products toward a future where more people can define and create personalized tools.
-
-The core challenge for AI agents is no longer just model capability alone. It is how to combine LLMs, tool invocation, multi-channel access, permission boundaries, and long-running operation into a system that can actually be deployed and maintained.
-
-OpenClaw has already validated a viable path for local execution and autonomous agents. On top of that, CountBot focuses on filling key gaps in **Chinese scenario adaptation, lightweight deployment, usability expansion, security control, and governance**.
-
-CountBot is not merely a conversational AI application. It is open infrastructure for real tasks: deployable, extensible, and governable, so ordinary users can use natural language to drive AI, organize tools, connect channels, and actually land business and daily workflows.
 
 ---
 
@@ -171,7 +124,7 @@ CountBot is not merely a conversational AI application. It is open infrastructur
 ### Option 1: Start From Source
 
 ```bash
-git clone https://github.com/countbot-ai/CountBot.git
+git clone https://github.com/Shen-An/CountBot.git
 cd CountBot
 
 # Default installation
@@ -223,7 +176,6 @@ git clone https://gitee.com/countbot-ai/CountBot.git
 | Remote Access Guide | Remote initialization, authentication, and troubleshooting | [https://654321.ai/docs/advanced/remote-access](https://654321.ai/docs/advanced/remote-access) |
 | Authentication | Password setup and access boundaries | [https://654321.ai/docs/advanced/auth](https://654321.ai/docs/advanced/auth) |
 | API Reference | REST API and WebSocket | [https://654321.ai/docs/api-reference](https://654321.ai/docs/api-reference) |
-| Release Notes | Version history and release changes | [https://654321.ai/docs/releases/v0.8.0](https://654321.ai/docs/releases/v0.8.0) |
 
 For the full documentation site, see: [https://654321.ai/docs](https://654321.ai/docs)
 
@@ -244,7 +196,7 @@ uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
 
 ### Issue Reporting
 
-- GitHub Issues: https://github.com/countbot-ai/CountBot/issues
+- GitHub Issues: https://github.com/Shen-An/CountBot/issues
 
 ---
 
@@ -261,7 +213,9 @@ MIT License
 - ZeroClaw
 - anthropics/skills
 
-### Technical Thanks
+### Acknowledgements
+
+Thanks to the original author of [countbot-ai/CountBot](https://github.com/countbot-ai/CountBot) for the open-source contribution. This project is a fork with extensions based on the original author's MIT-licensed code. All modifications are also released under the MIT License.
 
 Thanks to FastAPI, Vue.js, SQLAlchemy, Pydantic, LiteLLM, and other open-source projects.
 
@@ -271,8 +225,8 @@ Thanks to FastAPI, Vue.js, SQLAlchemy, Pydantic, LiteLLM, and other open-source 
   <p>An AI agent runtime hub that connects models, channels, teams, and tools</p>
   <p>
     <a href="https://654321.ai">Official Website</a> ·
-    <a href="https://github.com/countbot-ai/countbot">GitHub</a> ·
-    <a href="https://gitee.com/countbot-ai/CountBot">Gitee</a> ·
+    <a href="https://github.com/Shen-An/CountBot">This Fork</a> ·
+    <a href="https://github.com/countbot-ai/CountBot">Original Repository</a> ·
     <a href="https://654321.ai/docs">Full Documentation</a>
   </p>
 </div>
