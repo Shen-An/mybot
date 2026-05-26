@@ -292,14 +292,6 @@ class ChannelManager:
             except Exception as e:
                 logger.error(f"Error stopping channel {key}: {e}")
 
-            del self.channels[key]
-            channel_type = key.split(":")[0]
-            if channel_type in self._channels_by_type:
-                try:
-                    self._channels_by_type[channel_type].remove(key)
-                except ValueError:
-                    pass
-
         if keys_to_remove:
             logger.info(f"Stopped {len(keys_to_remove)} channel(s) for user #{user_id}")
         return len(keys_to_remove)

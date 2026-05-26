@@ -1,8 +1,34 @@
 {
   "permissions": {
     "allow": [
+      "Read",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash(npm *)",
+      "Bash(git *)",
+      "Bash(powershell *)",
+      "Bash(python *)",
+      "Bash(curl *)",
       "Bash(xargs grep -l -i \"config\\\\|setting\")",
-      "WebSearch"
+      "WebSearch",
+      "Bash(npx vue-tsc *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('modules/auth/dependencies.py'\\).read\\(\\)\\); print\\('OK: dependencies.py'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('api/channels.py'\\).read\\(\\)\\); print\\('OK: channels.py'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/modules/auth/dependencies.py'\\).read\\(\\)\\); print\\('OK: dependencies.py'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend/api/channels.py'\\).read\\(\\)\\); print\\('OK: channels.py'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('E:/Coding/Code/GitHub/CountBot/backend/modules/auth/dependencies.py'\\).read\\(\\)\\); print\\('OK: dependencies.py'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('E:/Coding/Code/GitHub/CountBot/backend/api/channels.py'\\).read\\(\\)\\); print\\('OK: channels.py'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('E:/Coding/Code/GitHub/CountBot/backend/modules/auth/dependencies.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK: dependencies.py'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('E:/Coding/Code/GitHub/CountBot/backend/api/channels.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK: channels.py'\\)\")",
+      "Bash(powershell *)",
+      "Bash(python3 *)",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('backend/modules/channels/manager.py'\\).read\\(\\)\\); print\\('manager.py OK'\\)\")",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('backend/modules/channels/manager.py', encoding='utf-8'\\).read\\(\\)\\); print\\('manager.py OK'\\)\")",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('backend/api/channels.py', encoding='utf-8'\\).read\\(\\)\\); print\\('channels.py OK'\\)\")",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('backend/app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('app.py OK'\\)\")",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('backend/modules/channels/handler.py', encoding='utf-8'\\).read\\(\\)\\); print\\('handler.py OK'\\)\")",
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\('backend/modules/channels/manager.py', encoding='utf-8'\\).read\\(\\)\\); print\\('manager.py OK'\\)\" ; python -c \"import ast; ast.parse\\(open\\('backend/modules/auth/router.py', encoding='utf-8'\\).read\\(\\)\\); print\\('router.py OK'\\)\")"
     ]
   }
 }

@@ -68,7 +68,7 @@
           <div class="form-field">
             <label>角色 *</label>
             <select v-model="form.role" required>
-              <option value="user">用户</option>
+              <option value="user">普通用户</option>
               <option value="operator">操作员</option>
               <option value="admin" v-if="authStore.isAdmin">管理员</option>
             </select>
@@ -123,7 +123,7 @@ const form = ref({
 })
 
 const roleLabel = (role: string) => {
-  const labels: Record<string, string> = { admin: '管理员', operator: '操作员', user: '用户' }
+  const labels: Record<string, string> = { admin: '管理员', operator: '操作员', user: '普通用户' }
   return labels[role] || role
 }
 

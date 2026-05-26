@@ -30,6 +30,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Default backend URL**: http://127.0.0.1:7000 (configurable via `COUNTBOT_HOST` / `COUNTBOT_PORT`)
 **Frontend dev URL**: http://localhost:5173 (Vite proxies `/api/*` and `/ws` to backend at `http://127.0.0.1:8000` by default; set `COUNTBOT_PORT=8000` or update Vite proxy target to match)
 
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `COUNTBOT_HOST` | `127.0.0.1` | Bind address for the backend server |
+| `COUNTBOT_PORT` | `7000` | Bind port for the backend server |
+
 ## Startup Flow
 
 `backend/app.py` uses FastAPI `lifespan` context manager. On startup, in order:
@@ -39,10 +46,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4. Seed bundled workspace resources
 5. Create `ProviderRuntimeState` with `KeyRotator` (round-robin + failover)
 6. Create `ChannelManager` + **`await manager.async_init()`** (loads per-user channel configs from DB into memory, does NOT start them)
-7. **`await manager.start_dispatch()`** starts only the outbound message dispatcher (channels start on user login, not on boot)
-8. Start MCP client manager
-9. Start cron scheduler
-10. Mount WebSocket endpoint at `/ws/chat`
+7. **`asyncio.create_task(channel_manager.start_all())`** — starts outbound dispatcher AND all channel supervision tasks on boot
+8. Start `ChannelMessageHandler.start_processing()` (consumes inbound messages from the bus)
+9. Initialize MCP client (if enabled, non-blocking background connection to stdio/SSE/streamable_http servers)
+10. Initialize OSS uploader (optional, for image/media upload)
+11. Initialize cron system — `CronExecutor` + `CronScheduler` + `HeartbeatService` + `ensure_heartbeat_job()`. Cron uses a separate `AgentLoop` (system-level, no user_id).
+12. Mount WebSocket endpoint at `/ws/chat` — per-connection tool registry (session isolation), user auth via cookie or Bearer token. Local connections auto-assign first admin as default user. MCP tools synced to per-session registry on connect.
+13. Mount frontend static files — SPA fallback for `/login` and `/setup/{secret}`.
+
+**Remote setup secret**: If no password hash exists at startup, a one-time setup token is generated (TTL = `REMOTE_SETUP_SECRET_TTL_MINUTES`, default 30 min). Printed to console log as `/setup/{secret}`. Cleared automatically once password is set via the setup wizard.
+
+**Graceful shutdown**: `channel_manager.stop_all()` → `cron_scheduler.stop()` → `atexit` fallback cleanup.
+
+**Channel lifecycle**: On boot, `start_all()` starts supervision tasks for ALL enabled channels immediately. On user login, `start_user_channels(user_id)` is called but is a no-op for already-running channels. On logout, `stop_user_channels(user_id)` stops channels and cancels their supervision tasks (channels stay registered in the manager for re-start on next login).
 
 ## Backend Architecture
 
@@ -194,7 +210,9 @@ class MyTool(Tool):
 - Tools return `str` results (not print)
 - Register in `backend/modules/tools/setup.py` → `register_all_tools()`
 - `ToolRegistry` uses `contextvars` for async-safe session/channel propagation
-- Audit logging is auto-enabled via `file_audit_logger.py`
+- Audit logging auto-enabled → `data/tool_audit.log`
+- **Two-phase registration**: First pass in `_create_shared_components()` (without channel_manager), second pass after channel_manager init (with channel_manager injected into tool params)
+- **Per-WebSocket-session registry**: Each WS connection gets its own `register_all_tools()` call for session isolation. MCP tools synced to each session's registry on connect.
 
 ### Provider System
 - 20+ LLM providers in `registry.py`, auto-detected by `create_provider(provider_id)`
@@ -207,15 +225,44 @@ class MyTool(Tool):
 - PBKDF2 password hashing, HMAC session tokens
 - Rate-limited login: 5 attempts / 15 min window → 15 min lockout
 - Cookie-based auth (`CountBot_token`) + Bearer token fallback
+- **Remote setup secret**: First-time setup via `/setup/{random_secret}` (TTL = `REMOTE_SETUP_SECRET_TTL_MINUTES`, default 30 min). Cleared once password is set.
 - `request.state.user` populated by `RemoteAuthMiddleware` for protected routes
 - `get_current_user_id()` / `get_effective_user_id()` Depends helpers for route-level user extraction
 - `set_current_user_context(id, username, role)` in `modules/auth/context.py` propagates user context via `contextvars` into non-HTTP layers (WebSocket, channel handlers, tools)
 - **Admin sudo mode**: `POST /api/auth/switch?target_user_id=N` creates a `CountBot_switch_token` cookie. Use `get_effective_user_id()` in user-scoped endpoints (channels, sessions) — `get_current_user_id()` in admin-only endpoints to prevent escalation.
+- **WebSocket auth**: Cookie or Bearer token. Local connections auto-assign first admin as default user.
 
 ### Config Storage
 - **Global config** in SQLite `Setting` table (key-value). `ConfigLoader` reads/writes nested dicts via JSON serialization (keys like `config.model.provider`). Pydantic v2 `AppConfig` model in `modules/config/schema.py`.
 - **Per-user channel config** in `UserChannelConfig` table. Each row has `user_id`, `channel`, `account_id`, `config_json` (JSON blob), `is_enabled`. Pydantic config classes (e.g., `WeChatConfig`) rebuilt from JSON via `_lazy_load_config_classes()` in `manager.py`.
 - Per-session overrides stored on Session model, merged via `resolve_session_runtime_config()`.
+
+### Workspace Management
+- Workspace path resolved via `WorkspaceManager.resolve_workspace_path_or_default()` — falls back to `./workspace` if configured path is invalid
+- Active workspace set via `workspace_manager.activate_workspace_path()` — affects all file operations
+- `WorkspaceValidator` prevents path traversal in file operations
+- Bundled resources (skills, memory templates) seeded on startup via `seed_bundled_workspace_resources()`
+- Skills always loaded from `workspace/skills/` (user's active workspace, not app root)
+
+### Session Naming & WebUI Visibility
+
+Channel sessions follow a strict naming convention for isolation and lookup:
+```
+{channel}:{account_id}:u{user_id}:{chat_id}:{YYYYMMDD_HHMMSS}
+```
+- `u{user_id}:` is present when a WebUI user owns the channel config (the user who configured the IM bot). The `ChannelManager._on_inbound_message()` callback injects `msg.metadata["user_id"] = ch._user_id` before the message reaches the handler.
+- `session.user_id` must match the owning user's `users.id` for the session to appear in WebUI (`GET /api/chat/sessions` filters by `WHERE user_id = <authenticated_user_id>`).
+- Messages from IM channels are persisted via `ChannelMessageHandler._save_message()` (user) and `SessionManager.add_message()` (assistant). The `_notify_webui_session_updated()` helper broadcasts `history_updated` and `sessions_updated` WebSocket events so the frontend refreshes in real time.
+
+### Frontend Routes
+
+| Path | Component | Access |
+|------|-----------|--------|
+| `/` | ChatWindow | requiresAuth |
+| `/login` | LoginView | guestOnly |
+| `/setup/:setupSecret` | LoginView | guestOnly (first-time setup) |
+| `/users` | UserManagement | admin/operator |
+| `/profile` | ProfileView | requiresAuth |
 
 ### Skills System
 - Markdown files with YAML frontmatter, loaded from 3 sources (descending priority):
@@ -229,18 +276,41 @@ class MyTool(Tool):
 ### WebSocket
 - Chat streaming at `/ws/chat` (WebSocket endpoint)
 - Connection managed via `ConnectionManager` in `ws/connection.py`
+- **Per-connection tool registry** (session isolation) — each WS connection gets its own `register_all_tools()` call
 - Heartbeat mechanism with configurable intervals, exponential backoff reconnect
 - Event loop in `ws/events.py` dispatches messages → AgentLoop → streaming responses
 - Tool call notifications pushed in real-time via `ws/tool_notifications.py`
 - Background task progress pushed via `ws/task_notifications.py`
+- MCP tools synced to per-session registry on connection (sync version of `McpClientManager.sync_to_registry_sync()`)
 
-### Tools
-- ~15 tools registered in `register_all_tools()` (filesystem, shell, web, sub-agent, etc.), some conditionally based on available dependencies
-- `ExecTool`: auto-detects `CountBot` conda env for subprocess Python, blocks dangerous commands
-- `WebFetchTool`: three stealth levels (basic/stealth/max-stealth with Playwright)
-- `ExternalCodingAgentTool`: adapters for Claude Code CLI, Codex, OpenCode
-- `MemoryTool`: unified memory write/search/read
-- `FileSearchTool`: semantic search via Whoosh index
+### MCP Client
+- Supports three protocols: **stdio**, **SSE**, **streamable_http**
+- `McpClientManager` — singleton, manages lifecycle of all connected MCP servers
+- Non-blocking background connection on startup (if `config.mcp.enabled = true`)
+- Tools auto-registered as `mcp_{server}_{tool_name}` in per-session tool registry
+- Health checks and reconnection for SSE/streamable_http servers
+
+### Tools (~15 registered)
+| Tool | Purpose |
+|------|---------|
+| `ExecTool` | Shell command execution (blocks dangerous commands, auto-detects conda env) |
+| `FileReadTool` / `FileWriteTool` / `FileEditTool` | File operations |
+| `FileSearchTool` | Semantic search via Whoosh index |
+| `WebFetchTool` | Web page fetch (3 stealth levels: basic/stealth/max-stealth with Playwright) |
+| `WebSearchTool` | Web search |
+| `MemoryTool` | Unified memory write/search/read |
+| `SubagentTool` | Spawn & track sub-agents |
+| `ExternalCodingAgentTool` | Adapters for Claude Code CLI, Codex, OpenCode |
+| `SendImageTool` / `SendFileTool` | Media sending to channels |
+| `ScreenshotTool` | Screen capture |
+| `MCP tools` | Auto-registered from connected MCP servers (`mcp_{server}_{tool_name}`) |
+
+### Cron & Heartbeat
+- **CronScheduler**: DB-backed job scheduling via `CronScheduler` (cron expression-based)
+- **CronExecutor**: Runs jobs via a dedicated `AgentLoop` (system-level, no user_id)
+- **HeartbeatService**: Idle detection + proactive greetings based on `HeartbeatConfig` (idle threshold, quiet hours, max greets/day)
+- `ensure_heartbeat_job()`: Ensures a default heartbeat cron job exists in the DB
+- Cron jobs trigger messages via configured channels at scheduled times
 
 ### Channels (IM) — Multi-Tenant
 - Abstract base class `Channel` in `modules/channels/base.py`
@@ -250,14 +320,14 @@ class MyTool(Tool):
 #### Channel Isolation Architecture
 - Configs stored in **`UserChannelConfig`** table (per-user rows with `user_id`, `channel`, `account_id`, `config_json`, `is_enabled`)
 - **`ChannelManager.__init__(bus, db_session_factory)`** — creates empty manager. Call **`await manager.async_init()`** to load enabled configs from DB into `self.channels` dict (keyed as `f"{channel}:{account_id}:{user_id}"`)
-- **Lifecycle**: On server boot, only the outbound dispatcher starts (`start_dispatch()`). Channels start when the owning user logs in (`start_user_channels(user_id)`) and stop on logout (`stop_user_channels(user_id)`). Explicit save/delete of channel config triggers a full reload (`_restart_channel_manager` → `start_all()`)
+- **Lifecycle**: On server boot, `start_all()` starts both the outbound dispatcher AND all channel supervision tasks. On user login, `start_user_channels(user_id)` is called (no-op if already running). On logout, `stop_user_channels(user_id)` stops channels and cancels tasks but does **not** remove them from `self.channels`, so `_on_inbound_message` can still look up `ch._user_id` by `instance_key` for user_id injection.
 - Each instance tagged with `channel._user_id` and stored in `self.channels[instance_key]`
 - **Config class registry**: `_lazy_load_config_classes()` lazily imports Pydantic config classes (TelegramConfig, QQConfig, etc.) from `schema.py` to rebuild config objects from `UserChannelConfig.config_json`
 - **Duplicate physical bot detection**: `async_init()` checks unique fields (e.g., `login_bot_id` for WeChat) across users and skips duplicates
 - **Outbound routing**: `_resolve_outbound_channel()` uses `msg.metadata["user_id"]` + `account_id` to route to the correct user's instance
 - **Status filtering**: `get_status(user_id=None)` skips instances not belonging to the specified user
 - **Hot-reload**: Save/delete channel config via API → `_restart_channel_manager_if_needed(request)` → creates new manager, calls `async_init()`, stops old, swaps, then starts all channels via `start_all()`
-- **User context propagation**: `ChannelMessageHandler.handle_message()` reads `msg.metadata["user_id"]` and calls `set_current_user_context(user_id, ...)` to scope AgentLoop sessions per user
+- **User context propagation**: `ChannelManager._on_inbound_message()` injects `msg.metadata["user_id"] = ch._user_id` before publishing to the bus. `ChannelMessageHandler.handle_message()` reads `msg.metadata["user_id"]` and calls `set_current_user_context(user_id, ...)` to scope AgentLoop sessions per user. The user_id is also written to `session.user_id` in the DB so WebUI `list_sessions` can find it.
 
 ### Code Conventions
 - All backend Python is `async/await` throughout
@@ -268,6 +338,8 @@ class MyTool(Tool):
 - `ExecTool` blocks dangerous commands (`rm -rf`, `shutdown`, etc.) by default
 - `ExecTool` auto-detects `CountBot` conda environment for subprocess Python
 - Audit logging enabled by default, writes to `data/tool_audit.log`
+- CORS: strict (empty origins, credentials disabled) — designed for local desktop use
+- SPA routing: frontend dist mounted at `/`, with fallbacks for `/login` and `/setup/{secret}`
 
 ## Common Development Tasks
 

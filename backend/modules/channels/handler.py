@@ -282,6 +282,27 @@ def _normalize_assistant_output(
     return normalized_content, str(normalized_reasoning or "")
 
 
+async def _notify_webui_session_updated(session_id: str) -> None:
+    """通知 WebUI 指定会话及会话列表需要刷新。"""
+    try:
+        from backend.ws.connection import (
+            ServerMessage,
+            connection_manager,
+            send_dict_to_session,
+        )
+
+        await send_dict_to_session(
+            session_id,
+            {
+                "type": "history_updated",
+                "sessionId": session_id,
+            },
+        )
+        await connection_manager.broadcast(ServerMessage(type="sessions_updated"))
+    except Exception as exc:
+        logger.debug(f"Failed to notify WebUI for session {session_id}: {exc}")
+
+
 class ChannelMessageHandler:
     """频道消息处理器
 
@@ -754,6 +775,9 @@ class ChannelMessageHandler:
                     except Exception as e:
                         logger.warning(f"[{msg.channel}] Failed to backfill message_id: {e}")
 
+                # 通知 WebUI 刷新（渠道消息不经过 /api/chat/send，需要手动通知）
+                asyncio.create_task(_notify_webui_session_updated(session_id))
+
                 try:
                     mirrored_session_id = await self._mirror_group_exchange_to_primary_context(
                         msg=msg,
@@ -766,6 +790,8 @@ class ChannelMessageHandler:
                             f"[{msg.channel}] Mirrored group exchange to primary session "
                             f"{mirrored_session_id} from account={session_route['source_account_id']}"
                         )
+                        # 同样通知 WebUI 刷新镜像会话
+                        asyncio.create_task(_notify_webui_session_updated(mirrored_session_id))
                 except Exception as e:
                     logger.warning(f"[{msg.channel}] Failed to mirror group exchange: {e}")
                 
@@ -1098,18 +1124,24 @@ class ChannelMessageHandler:
                 existing_context = _decode_message_context(getattr(session, "channel_context", None))
                 if channel_context and channel_context != existing_context:
                     session.channel_context = json.dumps(channel_context, ensure_ascii=False)
+                if msg_user_id is not None and getattr(session, "user_id", None) is None:
+                    session.user_id = msg_user_id
+                if db.is_modified(session):
                     await db.commit()
                 return session.id
 
             # 创建新会话，使用带时间戳的名称
+            # 会话名称必须与搜索前缀（prefix）匹配，否则后续消息会重复创建新会话
             import uuid
+            user_prefix = f"u{msg_user_id}:" if msg_user_id is not None else ""
             session_name = (
-                f"{msg.channel}:{account_id}:{session_chat_id}:"
+                f"{msg.channel}:{account_id}:{user_prefix}{session_chat_id}:"
                 f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             )
             session = Session(
                 id=str(uuid.uuid4()),
                 name=session_name,
+                user_id=msg_user_id,
                 channel_context=(
                     json.dumps(channel_context, ensure_ascii=False)
                     if channel_context
@@ -1237,8 +1269,11 @@ class ChannelMessageHandler:
         from datetime import datetime
 
         session_route = _resolve_session_route(msg)
+        msg_user_id = msg.metadata.get("user_id") if msg.metadata else None
+        user_prefix = f"u{msg_user_id}:" if msg_user_id is not None else ""
         session_name = (
-            f"{msg.channel}:{str(session_route['context_owner_account_id'])}:{str(session_route['session_chat_id'])}:"
+            f"{msg.channel}:{str(session_route['context_owner_account_id'])}:{user_prefix}"
+            f"{str(session_route['session_chat_id'])}:"
             f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         )
         session_id = str(uuid.uuid4())
@@ -1249,6 +1284,7 @@ class ChannelMessageHandler:
                 Session(
                     id=session_id,
                     name=session_name,
+                    user_id=msg_user_id,
                     channel_context=(
                         json.dumps(channel_context, ensure_ascii=False)
                         if channel_context
@@ -1936,6 +1972,9 @@ class ChannelMessageHandler:
                         f"[{msg.channel}] Failed to backfill direct-mode tool message_id: {e}"
                     )
 
+                # 通知 WebUI 刷新
+                asyncio.create_task(_notify_webui_session_updated(session_id))
+
             await self._send_reply(msg, result)
             duration = time.time() - start_time
             logger.info(
@@ -2089,6 +2128,9 @@ class ChannelMessageHandler:
                         )
                 except Exception as e:
                     logger.warning(f"[{msg.channel}] Failed to backfill team command message_id: {e}")
+
+                # 通知 WebUI 刷新
+                asyncio.create_task(_notify_webui_session_updated(session_id))
 
             channel_response = _WORKFLOW_META_RE.sub("", response).strip()
             await self._send_reply(msg, channel_response or response)
