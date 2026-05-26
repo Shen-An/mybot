@@ -1040,27 +1040,27 @@ async def update_settings(
             if "heartbeat" in request.persona:
                 hb = request.persona["heartbeat"]
                 if isinstance(hb, dict):
-                    # 构建临时 config 用于验证
-                    temp_persona = config_loader.config.persona.model_copy(deep=True)
+                    # 构建临时完整配置用于验证（需要 AppConfig 层级访问 channels）
+                    temp_config = config_loader.config.model_copy(deep=True)
                     if "enabled" in hb:
-                        temp_persona.heartbeat.enabled = hb["enabled"]
+                        temp_config.persona.heartbeat.enabled = hb["enabled"]
                     if "channel" in hb:
-                        temp_persona.heartbeat.channel = hb["channel"]
+                        temp_config.persona.heartbeat.channel = hb["channel"]
                     if "account_id" in hb:
-                        temp_persona.heartbeat.account_id = hb["account_id"] or "default"
+                        temp_config.persona.heartbeat.account_id = hb["account_id"] or "default"
                     if "chat_id" in hb:
-                        temp_persona.heartbeat.chat_id = hb["chat_id"]
+                        temp_config.persona.heartbeat.chat_id = hb["chat_id"]
                     if "schedule" in hb:
-                        temp_persona.heartbeat.schedule = hb["schedule"]
+                        temp_config.persona.heartbeat.schedule = hb["schedule"]
                     if "idle_threshold_hours" in hb:
-                        temp_persona.heartbeat.idle_threshold_hours = hb["idle_threshold_hours"]
+                        temp_config.persona.heartbeat.idle_threshold_hours = hb["idle_threshold_hours"]
                     if "quiet_start" in hb:
-                        temp_persona.heartbeat.quiet_start = hb["quiet_start"]
+                        temp_config.persona.heartbeat.quiet_start = hb["quiet_start"]
                     if "quiet_end" in hb:
-                        temp_persona.heartbeat.quiet_end = hb["quiet_end"]
+                        temp_config.persona.heartbeat.quiet_end = hb["quiet_end"]
                     if "max_greets_per_day" in hb:
-                        temp_persona.heartbeat.max_greets_per_day = hb["max_greets_per_day"]
-                    _validate_and_normalize_heartbeat_settings(temp_persona)
+                        temp_config.persona.heartbeat.max_greets_per_day = hb["max_greets_per_day"]
+                    _validate_and_normalize_heartbeat_settings(temp_config)
 
         # 保存用户配置
         for section, data in user_config_updates.items():

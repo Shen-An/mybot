@@ -1,5 +1,9 @@
 """CurrentUser 依赖注入 — 多用户认证上下文"""
 
+import hashlib
+import json
+from typing import Optional
+
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +18,39 @@ async def get_current_user_id(request: Request) -> int:
     if user_id is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
     return user_id
+
+
+async def get_effective_user_id(request: Request, db: AsyncSession = Depends(get_db)) -> int:
+    """获取有效用户 ID（支持管理员模拟切换）。
+
+    当管理员使用 CountBot_switch_token 模拟其他用户时，返回被模拟用户的 ID。
+    否则返回当前认证用户的 ID（与 get_current_user_id 一致）。
+    """
+    real_user_id = await get_current_user_id(request)
+
+    switch_token = request.cookies.get("CountBot_switch_token")
+    if not switch_token:
+        return real_user_id
+
+    try:
+        token_hash = hashlib.sha256(switch_token.encode("utf-8")).hexdigest()
+        switch_key = f"auth.switch.{token_hash}"
+
+        from backend.models.setting import Setting
+
+        result = await db.execute(select(Setting).where(Setting.key == switch_key))
+        setting = result.scalar_one_or_none()
+        if setting is None:
+            return real_user_id
+
+        switch_data = json.loads(setting.value)
+        target_user_id = switch_data.get("target_user_id")
+        if target_user_id is None:
+            return real_user_id
+
+        return int(target_user_id)
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return real_user_id
 
 
 async def get_current_user(user_id: int = Depends(get_current_user_id), db: AsyncSession = Depends(get_db)):

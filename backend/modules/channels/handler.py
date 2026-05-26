@@ -473,6 +473,11 @@ class ChannelMessageHandler:
         tool_event_handler = msg.metadata.get('_tool_event_handler') if msg.metadata else None
 
         try:
+            # 从消息元数据中提取 user_id，设置用户上下文（多用户渠道隔离）
+            msg_user_id = msg.metadata.get("user_id") if msg.metadata else None
+            if msg_user_id is not None:
+                from backend.modules.auth.context import set_current_user_context
+                set_current_user_context(user_id=msg_user_id, username=f"channel_{msg_user_id}", role="user")
             logger.info(
                 f"[{msg.channel}] Handling from {msg.sender_id} "
                 f"(chat={msg.chat_id}): {msg.content[:50]}..."
@@ -948,11 +953,16 @@ class ChannelMessageHandler:
     async def _send_reply(self, original_msg: InboundMessage, content: str) -> None:
         """发布回复到出站总线。"""
         try:
+            metadata = dict(original_msg.metadata or {})
+            # 确保 user_id 传递到出站路由
+            msg_user_id = original_msg.metadata.get("user_id") if original_msg.metadata else None
+            if msg_user_id is not None:
+                metadata["user_id"] = msg_user_id
             reply = OutboundMessage(
                 channel=original_msg.channel,
                 chat_id=original_msg.chat_id,
                 content=content,
-                metadata=original_msg.metadata,  # 传递原始消息的 metadata
+                metadata=metadata,
             )
             await self.bus.publish_outbound(reply)
         except Exception as e:
@@ -1029,7 +1039,7 @@ class ChannelMessageHandler:
             return result.scalar_one_or_none()
 
     async def _get_or_create_session(self, msg: InboundMessage) -> str:
-        """获取已有会话或创建新会话。"""
+        """获取已有会话或创建新会话（按用户隔离）。"""
         if msg.metadata:
             existing_session_id = str(msg.metadata.get("session_id") or "").strip()
             if existing_session_id:
@@ -1054,13 +1064,18 @@ class ChannelMessageHandler:
         *,
         cache_key: Optional[str] = None,
     ) -> str:
-        """按指定路由解析或创建会话。"""
+        """按指定路由解析或创建会话（按用户隔离）。"""
         from sqlalchemy import select
         from datetime import datetime
 
         account_id = str(session_route["context_owner_account_id"])
         session_chat_id = str(session_route["session_chat_id"])
-        prefix = f"{msg.channel}:{account_id}:{session_chat_id}"
+        msg_user_id = msg.metadata.get("user_id") if msg.metadata else None
+        # 会话前缀包含 user_id，确保不同用户的会话隔离
+        if msg_user_id is not None:
+            prefix = f"{msg.channel}:{account_id}:u{msg_user_id}:{session_chat_id}"
+        else:
+            prefix = f"{msg.channel}:{account_id}:{session_chat_id}"
         legacy_prefix = f"{msg.channel}:{session_chat_id}"
         channel_context = self._build_session_channel_context(msg, session_route)
         async with self.db_session_factory() as db:

@@ -6,16 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **CountBot** is an open-source AI Agent framework and execution hub for Chinese users. It connects LLMs, IM channels, workflows, and external tools into a unified execution pipeline.
 
-**Stack**: FastAPI (backend) + Vue 3 + TypeScript (frontend) + SQLite (database) + Python 3.8+
+**Stack**: FastAPI (backend) + Vue 3 + TypeScript (frontend) + SQLite (database) + Python 3.10+
 **Deployment**: Source (`python start_app.py`) or Desktop (PyInstaller-packaged, see releases)
+**Ports**: Default 7000 (both `start_app.py` and `start_dev.py`). Configurable via `COUNTBOT_HOST` / `COUNTBOT_PORT`.
 
 ## Quick Commands
 
 | Task | Command |
 |------|---------|
-| Start backend only | `uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000` |
-| Start production | `python start_app.py` |
-| Start dev (hot reload) | `python start_dev.py` |
+| Start production | `python start_app.py` (default port: 7000) |
+| Start dev (hot reload) | `python start_dev.py` (default port: 7000) |
+| Start backend only | `uvicorn backend.app:app --reload --host 0.0.0.0 --port 7000` |
 | Backend lint | `flake8 backend/` |
 | Run tests | `python -m pytest tests/ -v` |
 | Frontend dev | `cd frontend && npm run dev` |
@@ -26,9 +27,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Install backend deps | `pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/` |
 | Create conda env | `conda env create -f environment.yml` |
 
-**Default URL**: http://127.0.0.1:8000
-**Frontend dev URL**: http://localhost:5173 (proxies API to backend via Vite config)
-**Environment overrides**: `COUNTBOT_HOST` / `COUNTBOT_PORT`
+**Default backend URL**: http://127.0.0.1:7000 (configurable via `COUNTBOT_HOST` / `COUNTBOT_PORT`)
+**Frontend dev URL**: http://localhost:5173 (Vite proxies `/api/*` and `/ws` to backend at `http://127.0.0.1:8000` by default; set `COUNTBOT_PORT=8000` or update Vite proxy target to match)
 
 ## Startup Flow
 
@@ -38,10 +38,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. Resolve workspace path (via `WorkspaceManager`, falls back to `./workspace`)
 4. Seed bundled workspace resources
 5. Create `ProviderRuntimeState` with `KeyRotator` (round-robin + failover)
-6. Create `ChannelManager` (starts all enabled IM channels)
-7. Start MCP client manager
-8. Start cron scheduler
-9. Mount WebSocket endpoint at `/ws/chat`
+6. Create `ChannelManager` + **`await manager.async_init()`** (loads per-user channel configs from DB into memory, does NOT start them)
+7. **`await manager.start_dispatch()`** starts only the outbound message dispatcher (channels start on user login, not on boot)
+8. Start MCP client manager
+9. Start cron scheduler
+10. Mount WebSocket endpoint at `/ws/chat`
 
 ## Backend Architecture
 
@@ -73,7 +74,7 @@ backend/
 │   │   ├── registry.py     # ToolRegistry: register/execute with contextvars + audit logging
 │   │   └── setup.py        # register_all_tools() — single registration entry point
 │   │
-│   ├── providers/          # LLM provider abstraction (23 providers)
+│   ├── providers/          # LLM provider abstraction (22 providers)
 │   │   ├── registry.py     # Provider metadata (api_base, env_key, model list)
 │   │   ├── factory.py      # create_provider() → AnthropicProvider or OpenAIProvider
 │   │   ├── runtime.py      # ProviderRuntimeState + KeyRotator
@@ -86,9 +87,18 @@ backend/
 │   │   └── rate_limiter.py     # Per-channel rate limiting
 │   │
 │   ├── channels/           # IM channel adapters
-│   │   ├── manager.py      # ChannelManager: lifecycle for all channels
-│   │   ├── handler.py      # ChannelMessageHandler: inbound → AgentLoop → outbound
-│   │   └── base.py         # Channel ABC (send_message, receive, lifecycle hooks)
+│   │   ├── manager.py      # ChannelManager: loads from UserChannelConfig, user_id-tagged instances
+│   │   ├── handler.py      # ChannelMessageHandler: inbound → AgentLoop → outbound (user-scoped sessions)
+│   │   ├── base.py         # Channel ABC (send_message, receive, lifecycle hooks)
+│   │   ├── feishu_websocket_worker.py # Feishu WS subprocess worker (runs in separate process)
+│   │   └── media_utils.py  # Shared media download/conversion utilities
+│   │
+│   ├── external_agents/    # External coding agent (Claude Code, Codex, OpenCode)
+│   │   ├── registry.py     # ExternalAgentRegistry: JSON-config profile management
+│   │   ├── base.py         # Adapter ABC + profile/request/result data classes
+│   │   ├── routing.py      # Regex-based NL intent extraction for agent routing
+│   │   ├── conversation.py # Session mode helpers (stateless/history/native)
+│   │   └── adapters/cli.py # CliExternalAgentAdapter via subprocess
 │   │
 │   ├── session/            # Session & conversation management
 │   │   ├── manager.py      # SessionManager: CRUD sessions + messages
@@ -103,6 +113,12 @@ backend/
 │   │   └── tool_notifications.py # Real-time tool call status push via WS
 │   │
 │   └── auth/               # Multi-user auth (PBKDF2, HMAC sessions, rate limiting)
+│
+├── modules/config/          # Config schema & loader
+│   ├── schema.py            # All Pydantic models: AppConfig, PersonaConfig, HeartbeatConfig,
+│   │                        #   ChannelsConfig + per-channel account configs (Telegram, QQ, etc.)
+│   ├── loader.py            # ConfigLoader: read/write from Setting table via JSON serialization
+│   └── user_config.py       # Per-user config storage/retrieval
 │
 ├── models/                 # SQLAlchemy models
 │   ├── user.py             # Users (id, username, password_hash, role, is_active)
@@ -127,10 +143,11 @@ frontend/src/
 ├── main.ts                 # Entry: Vue 3 + Pinia + Router + i18n
 ├── App.vue                 # Root: router-view + global overlays
 ├── api/                    # Axios API client + typed endpoint modules
-│   ├── endpoints.ts        # Centralized typed API calls (authAPI, systemAPI, etc.)
-│   ├── client.ts           # Axios instance with interceptors
-│   └── auth.ts             # Re-exports authAPI from endpoints
-├── store/                  # Pinia stores (chat, settings, skills, tools, auth, etc.)
+│   ├── client.ts           # Axios instance with interceptors, retry, timeout
+│   ├── endpoints.ts        # Centralized typed API calls (chatAPI, systemAPI, authAPI, etc.)
+│   ├── index.ts            # Unified re-exports
+│   └── auth.ts             # Auth-specific helpers
+├── store/                  # Pinia stores (chat, settings, auth, channels, tools, skills, cron, memory, agentTeams, externalCodingTools)
 ├── components/             # Reusable components
 │   ├── chat/               # ChatHeader, ChatInput, MessageContent, etc.
 │   └── ui/                 # UI kit (Button, Modal, Select, Toast, DropZone, etc.)
@@ -144,7 +161,7 @@ frontend/src/
 
 - **API layer**: `endpoints.ts` has typed methods for every backend endpoint, using a shared `apiClient` (Axios) from `client.ts`
 - **State**: Pinia stores in `store/`, each managing a domain (chat, auth, settings, tools, skills, etc.)
-- **Vite proxy**: Dev server proxies `/api/*` → `http://127.0.0.1:8000` and `/ws` → WebSocket
+- **Vite proxy**: Dev server proxies `/api/*` → backend at the configured target. If backend is on port 7000 (default for `start_dev.py`), update `vite.config.ts` proxy target accordingly.
 - **Path aliases**: `@/` → `src/`, `@components/`, `@modules/`, `@store/`, `@api/`, `@composables/`, `@i18n/`, `@assets/`
 
 ## Key Data Flow
@@ -180,7 +197,7 @@ class MyTool(Tool):
 - Audit logging is auto-enabled via `file_audit_logger.py`
 
 ### Provider System
-- 23+ LLM providers in `registry.py`, auto-detected by `create_provider(provider_id)`
+- 20+ LLM providers in `registry.py`, auto-detected by `create_provider(provider_id)`
 - Two base implementations: `AnthropicProvider` (Messages API) and `OpenAIProvider` (Chat Completions API)
 - `KeyRotator` handles round-robin key rotation + 401/403 failover
 - Per-session provider overrides via `SessionRuntimeConfig`
@@ -189,15 +206,16 @@ class MyTool(Tool):
 - Users table with roles: `admin`, `operator`, `user`
 - PBKDF2 password hashing, HMAC session tokens
 - Rate-limited login: 5 attempts / 15 min window → 15 min lockout
-- Admin-only endpoints for user management (CRUD, sudo-mode user switch)
 - Cookie-based auth (`CountBot_token`) + Bearer token fallback
-- `request.state.user` populated by middleware for protected routes
+- `request.state.user` populated by `RemoteAuthMiddleware` for protected routes
+- `get_current_user_id()` / `get_effective_user_id()` Depends helpers for route-level user extraction
+- `set_current_user_context(id, username, role)` in `modules/auth/context.py` propagates user context via `contextvars` into non-HTTP layers (WebSocket, channel handlers, tools)
+- **Admin sudo mode**: `POST /api/auth/switch?target_user_id=N` creates a `CountBot_switch_token` cookie. Use `get_effective_user_id()` in user-scoped endpoints (channels, sessions) — `get_current_user_id()` in admin-only endpoints to prevent escalation.
 
 ### Config Storage
-- All config in SQLite `Setting` table (key-value)
-- `ConfigLoader` reads/writes nested dicts via JSON serialization (keys like `config.model.provider`)
-- Pydantic v2 `AppConfig` model in `modules/config/schema.py`
-- Per-session overrides stored on Session model, merged via `resolve_session_runtime_config()`
+- **Global config** in SQLite `Setting` table (key-value). `ConfigLoader` reads/writes nested dicts via JSON serialization (keys like `config.model.provider`). Pydantic v2 `AppConfig` model in `modules/config/schema.py`.
+- **Per-user channel config** in `UserChannelConfig` table. Each row has `user_id`, `channel`, `account_id`, `config_json` (JSON blob), `is_enabled`. Pydantic config classes (e.g., `WeChatConfig`) rebuilt from JSON via `_lazy_load_config_classes()` in `manager.py`.
+- Per-session overrides stored on Session model, merged via `resolve_session_runtime_config()`.
 
 ### Skills System
 - Markdown files with YAML frontmatter, loaded from 3 sources (descending priority):
@@ -217,23 +235,33 @@ class MyTool(Tool):
 - Background task progress pushed via `ws/task_notifications.py`
 
 ### Tools
-- 20+ tools registered in `register_all_tools()` (filesystem, shell, web, sub-agent, etc.)
+- ~15 tools registered in `register_all_tools()` (filesystem, shell, web, sub-agent, etc.), some conditionally based on available dependencies
 - `ExecTool`: auto-detects `CountBot` conda env for subprocess Python, blocks dangerous commands
 - `WebFetchTool`: three stealth levels (basic/stealth/max-stealth with Playwright)
 - `ExternalCodingAgentTool`: adapters for Claude Code CLI, Codex, OpenCode
 - `MemoryTool`: unified memory write/search/read
 - `FileSearchTool`: semantic search via Whoosh index
 
-### Channels (IM)
+### Channels (IM) — Multi-Tenant
 - Abstract base class `Channel` in `modules/channels/base.py`
-- Implemented: WeChat, Feishu, DingTalk, QQ, Telegram, WeCom, Weibo, XiaoZhi AI
+- Implemented: WeChat, Feishu, DingTalk, QQ, Telegram, Discord, WeCom, Weibo, XiaoZhi AI
 - Each channel: `send_message()`, `receive_loop()`, lifecycle hooks
-- Register in `modules/channels/manager.py`
-- Add config model in `modules/config/schema.py`
+
+#### Channel Isolation Architecture
+- Configs stored in **`UserChannelConfig`** table (per-user rows with `user_id`, `channel`, `account_id`, `config_json`, `is_enabled`)
+- **`ChannelManager.__init__(bus, db_session_factory)`** — creates empty manager. Call **`await manager.async_init()`** to load enabled configs from DB into `self.channels` dict (keyed as `f"{channel}:{account_id}:{user_id}"`)
+- **Lifecycle**: On server boot, only the outbound dispatcher starts (`start_dispatch()`). Channels start when the owning user logs in (`start_user_channels(user_id)`) and stop on logout (`stop_user_channels(user_id)`). Explicit save/delete of channel config triggers a full reload (`_restart_channel_manager` → `start_all()`)
+- Each instance tagged with `channel._user_id` and stored in `self.channels[instance_key]`
+- **Config class registry**: `_lazy_load_config_classes()` lazily imports Pydantic config classes (TelegramConfig, QQConfig, etc.) from `schema.py` to rebuild config objects from `UserChannelConfig.config_json`
+- **Duplicate physical bot detection**: `async_init()` checks unique fields (e.g., `login_bot_id` for WeChat) across users and skips duplicates
+- **Outbound routing**: `_resolve_outbound_channel()` uses `msg.metadata["user_id"]` + `account_id` to route to the correct user's instance
+- **Status filtering**: `get_status(user_id=None)` skips instances not belonging to the specified user
+- **Hot-reload**: Save/delete channel config via API → `_restart_channel_manager_if_needed(request)` → creates new manager, calls `async_init()`, stops old, swaps, then starts all channels via `start_all()`
+- **User context propagation**: `ChannelMessageHandler.handle_message()` reads `msg.metadata["user_id"]` and calls `set_current_user_context(user_id, ...)` to scope AgentLoop sessions per user
 
 ### Code Conventions
 - All backend Python is `async/await` throughout
-- `contextvars` used for async-safe request context propagation
+- `contextvars` used for async-safe request context propagation (`backend/modules/auth/context.py`)
 - Logger: `from loguru import logger`
 - Database: SQLAlchemy async session via `get_db()` dependency
 - WorkspaceValidator prevents path traversal in file operations
@@ -244,7 +272,7 @@ class MyTool(Tool):
 ## Common Development Tasks
 
 **Add a new tool**: Create `backend/modules/tools/my_tool.py` → inherit `Tool` → register in `setup.py`
-**Add a new IM channel**: Create `modules/channels/my_channel.py` → inherit `Channel` → register in `manager.py` + add config model in `schema.py`
+**Add a new IM channel**: Create `modules/channels/my_channel.py` → inherit `Channel` → add Pydantic config in `schema.py` → register channel class + config class in `manager.py` (`_CHANNEL_REGISTRY` + `_CHANNEL_CONFIG_CLASSES`)
 **Add a new LLM provider**: Create `modules/providers/my_provider.py` → inherit `Provider` → register in `registry.py`
 **Add a new API route**: Create `backend/api/my_routes.py` → create APIRouter → mount in `app.py`
 **Add a new DB model**: Create `backend/models/my_model.py` → import in `models/__init__.py` → auto-created on startup

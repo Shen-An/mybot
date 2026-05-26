@@ -1,5 +1,6 @@
 """Authentication API endpoints — multi-user support."""
 
+import asyncio
 import json
 import threading
 import time
@@ -360,6 +361,12 @@ async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends
     await db.commit()
 
     token = await create_auth_session(user.id, db)
+
+    # 启动该用户的渠道实例（异步，不阻塞登录）
+    channel_manager = getattr(request.app.state, "channel_manager", None)
+    if channel_manager is not None:
+        asyncio.ensure_future(channel_manager.start_user_channels(user.id))
+
     response = JSONResponse(
         content={
             "success": True,
@@ -440,8 +447,17 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
 @router.post("/logout")
 async def logout(request: Request, db: AsyncSession = Depends(get_db)):
     token = request.cookies.get(AUTH_COOKIE_NAME)
+    user_id = None
     if token:
+        from backend.modules.auth.utils import validate_auth_session
+        user_id = await validate_auth_session(token, db)
         await revoke_auth_session(token, db)
+
+    # 停止当前用户的渠道实例
+    if user_id is not None:
+        channel_manager = getattr(request.app.state, "channel_manager", None)
+        if channel_manager is not None:
+            await channel_manager.stop_user_channels(user_id)
 
     clear_current_user_context()
     response = JSONResponse(content={"success": True})

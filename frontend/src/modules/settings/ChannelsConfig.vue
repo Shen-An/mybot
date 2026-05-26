@@ -319,9 +319,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChannelsStore } from '@/store/channels'
+import { useAuthStore } from '@/store/auth'
 import { useToast } from '@/composables/useToast'
 import TelegramConfig from './channels/TelegramConfig.vue'
 import DiscordConfig from './channels/DiscordConfig.vue'
@@ -336,7 +337,19 @@ import type { ChannelInstanceStatus } from '@/store/channels'
 
 const { t, te } = useI18n()
 const channelsStore = useChannelsStore()
+const authStore = useAuthStore()
 const toast = useToast()
+
+// 监听用户切换：当管理员模拟/退出模拟其他用户时重新拉取渠道数据
+watch(
+  () => authStore.user?.user_id,
+  (newId, oldId) => {
+    if (oldId !== undefined && newId !== oldId) {
+      channelsStore.fetchChannels()
+      channelsStore.fetchStatus()
+    }
+  }
+)
 
 const expandedChannel = ref<string | null>(null)
 const testResult = ref<any>(null)
@@ -387,6 +400,11 @@ const isRecommended = (channelId: string) => {
 }
 
 const isRunning = (channelId: string) => {
+  // 只有当前用户启用了该渠道 + 全局运行中，才算对当前用户"运行中"
+  const channel = channelsStore.channels[channelId]
+  if (!channel || !channel.enabled) {
+    return false
+  }
   const status = channelsStore.status[channelId]
   return status && status.running
 }
@@ -434,9 +452,13 @@ const getChannelInstances = (channelId: string): Array<ChannelInstanceStatus & {
     upsertInstance(accountId, account as Record<string, any>)
   })
 
-  Object.entries(statusInstances).forEach(([accountId, instance]) => {
-    upsertInstance(accountId, instance as Record<string, any>, true)
-  })
+  // 只有在用户已配置该渠道时，才合并全局运行状态（防止新用户看到其他用户的渠道状态）
+  const userHasConfig = config && (config.account_id || Object.keys(config.accounts || {}).length > 0 || config.enabled)
+  if (userHasConfig) {
+    Object.entries(statusInstances).forEach(([accountId, instance]) => {
+      upsertInstance(accountId, instance as Record<string, any>, true)
+    })
+  }
 
   return Array.from(merged.values()).sort((left, right) => {
     if (left.account_id === 'default') return -1

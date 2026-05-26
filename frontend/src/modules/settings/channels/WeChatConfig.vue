@@ -399,8 +399,11 @@ const pollQrLogin = async (botKey: string) => {
     state.message = String(data.message || '')
 
     if (state.status === 'confirmed') {
-      if (data.config) {
-        applyConfigFromServer(data.config)
+      // 合并服务端返回的登录结果到现有配置，避免丢失其他字段
+      const result = data.result
+      if (result) {
+        const merged = { ...cloneConfig(), ...result, account_id: data.account_id || 'default' }
+        applyConfigFromServer(merged)
       }
       state.qrcodeUrl = ''
       state.rawQrcodeValue = ''

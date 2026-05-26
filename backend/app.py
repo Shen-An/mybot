@@ -235,7 +235,8 @@ async def lifespan(app: FastAPI):
 
     # 创建渠道管理器
     logger.info("Creating channel manager...")
-    channel_manager = ChannelManager(config, message_queue)
+    channel_manager = ChannelManager(message_queue, db_session_factory=get_db_session_factory())
+    await channel_manager.async_init()
     app.state.channel_manager = channel_manager
     set_channel_manager(channel_manager)
     message_handler.set_channel_manager(channel_manager)
@@ -289,11 +290,11 @@ async def lifespan(app: FastAPI):
     # 启动后台任务（不等待完成）
     app.state.background_tasks = []
     app.state.channel_manager_task = None
-    if channel_manager.enabled_channels:
-        task = asyncio.create_task(channel_manager.start_all())
-        app.state.channel_manager_task = task
-        app.state.background_tasks.append(task)
-        logger.info(f"Started {len(channel_manager.enabled_channels)} channel(s) in background")
+    # 启动所有已启用的渠道和出站调度器（异步非阻塞）
+    channel_task = asyncio.create_task(channel_manager.start_all())
+    app.state.channel_manager_task = channel_task
+    app.state.background_tasks.append(channel_task)
+    logger.info("Channel manager started")
     
     task = asyncio.create_task(message_handler.start_processing())
     app.state.background_tasks.append(task)

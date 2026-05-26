@@ -13,13 +13,13 @@ from sqlalchemy import select, update as sql_update, delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
-from backend.database import AsyncSessionLocal, get_db
+from backend.database import AsyncSessionLocal, get_db, get_db_session_factory
 from backend.models.user_channel_config import UserChannelConfig
 from backend.models.user import User as UserModel
 from backend.modules.config.loader import config_loader
 from backend.modules.channels.manager import ChannelManager
 from backend.modules.external_agents.registry import ExternalAgentRegistry
-from backend.modules.auth.dependencies import get_current_user_id
+from backend.modules.auth.dependencies import get_current_user_id, get_effective_user_id
 
 
 router = APIRouter(prefix="/api/channels", tags=["channels"])
@@ -175,8 +175,8 @@ def _validate_external_coding_route_config(channel_name: str, accounts: Dict[str
 
 
 async def _get_current_user_id(request: Request, db: AsyncSession = Depends(get_db)) -> int:
-    """获取当前用户 ID"""
-    return await get_current_user_id(request=request)
+    """获取当前用户 ID（支持管理员模拟切换 -> 返回被模拟用户的 ID）"""
+    return await get_effective_user_id(request, db)
 
 
 async def _is_admin(request: Request, db: AsyncSession = Depends(get_db)) -> bool:
@@ -286,7 +286,7 @@ async def list_channels(
             accounts = []
             for cfg in configs:
                 # 掩码敏感信息
-                masked_config = {k: _mask_channel_secret(k, v) for k, v in cfg.config.items()}
+                masked_config = {k: _mask_channel_secret(k, v) for k, v in cfg.config_json.items()}
                 accounts.append({
                     "account_id": cfg.account_id,
                     "is_enabled": cfg.is_enabled,
@@ -371,7 +371,7 @@ async def get_my_channel_config(
             "success": True,
             "channel": channel,
             "account_id": config.account_id,
-            "config": config.config,
+            "config": config.config_json,
             "is_enabled": config.is_enabled,
             "exists": True,
             "id": config.id,
@@ -440,7 +440,7 @@ async def save_my_channel_config(
         await db.commit()
 
         # 热更新渠道管理器
-        await _restart_channel_manager_if_needed()
+        await _restart_channel_manager_if_needed(request)
 
         return {
             "success": True,
@@ -488,7 +488,7 @@ async def delete_my_channel_config(
         logger.info(f"Deleted channel config: user_id={current_user_id}, channel={channel}, account={account_id}")
 
         # 热更新渠道管理器
-        await _restart_channel_manager_if_needed()
+        await _restart_channel_manager_if_needed(request)
 
         return {
             "success": True,
@@ -589,7 +589,7 @@ async def save_user_config(
             result_id = new_config.id
 
         await db.commit()
-        await _restart_channel_manager_if_needed()
+        await _restart_channel_manager_if_needed(request)
 
         return {
             "success": True,
@@ -627,7 +627,7 @@ async def delete_user_config(
         await db.execute(sql_delete(UserChannelConfig).where(UserChannelConfig.id == config.id))
         await db.commit()
 
-        await _restart_channel_manager_if_needed()
+        await _restart_channel_manager_if_needed(request)
 
         return {"success": True, "message": "删除成功"}
 
@@ -653,6 +653,38 @@ async def _require_admin(request: Request, db: AsyncSession) -> UserModel:
 # ============================================================
 # Channel Test (uses user's config)
 # ============================================================
+
+async def _test_channel_connection(channel_name: str, config_dict: Dict[str, Any], user_id: int, request: Request) -> Dict[str, Any]:
+    """测试渠道连接 — 创建临时实例进行测试。"""
+    from backend.modules.channels.manager import _CHANNEL_REGISTRY, _CHANNEL_CONFIG_CLASSES, _lazy_load_config_classes
+    _lazy_load_config_classes()
+
+    if channel_name not in _CHANNEL_REGISTRY:
+        return {"success": False, "message": f"未知渠道: {channel_name}"}
+
+    module_path, class_name = _CHANNEL_REGISTRY[channel_name]
+    config_class = _CHANNEL_CONFIG_CLASSES.get(channel_name)
+    if not config_class:
+        return {"success": False, "message": f"配置类未找到: {channel_name}"}
+
+    try:
+        module = __import__(module_path, fromlist=[class_name])
+        cls = getattr(module, class_name)
+    except ImportError as e:
+        return {"success": False, "message": f"渠道模块不可用: {e}"}
+
+    try:
+        config_obj = config_class.model_validate(config_dict)
+    except Exception as e:
+        return {"success": False, "message": f"配置无效: {e}"}
+
+    try:
+        channel = cls(config_obj)
+        return await channel.test_connection()
+    except Exception as e:
+        logger.error(f"Error testing {channel_name}: {e}")
+        return {"success": False, "message": f"测试失败: {e}"}
+
 
 @router.post("/test")
 async def test_channel(
@@ -691,8 +723,7 @@ async def test_channel(
             temp_config = merged_config
 
         # 测试连接
-        from backend.modules.channels.handler import test_channel_connection
-        result = await test_channel_connection(data.channel, temp_config)
+        result = await _test_channel_connection(data.channel, temp_config, current_user_id, request)
 
         # 翻译消息
         translated_message = _translate_test_message(result.get("message", ""))
@@ -738,33 +769,96 @@ def _translate_test_message(message: str) -> str:
 
 
 # ============================================================
+# WeChat QR Login
+# ============================================================
+
+class WeChatLoginStartRequest(BaseModel):
+    account_id: str = "default"
+    config: Dict[str, Any] = {}
+
+
+@router.post("/wechat/login/start")
+async def wechat_login_start(data: WeChatLoginStartRequest, request: Request):
+    """开始微信扫码登录，返回二维码 URL 和 session_key。"""
+    try:
+        from backend.modules.channels.wechat import start_wechat_qr_login
+
+        account_id = str(data.account_id or "default")
+        config_snapshot = dict(data.config or {})
+
+        result = await start_wechat_qr_login(
+            account_id=account_id,
+            base_url="",
+            config_snapshot=config_snapshot,
+        )
+
+        return {
+            "success": True,
+            "qrcode_url": result.get("qrcode_url", ""),
+            "session_key": result.get("session_key", ""),
+            "account_id": account_id,
+        }
+    except Exception as e:
+        logger.error(f"Error starting WeChat login: {e}")
+        return {"success": False, "message": f"启动登录失败: {e}"}
+
+
+@router.post("/wechat/login/poll")
+async def wechat_login_poll(data: Dict[str, Any] = {}):
+    """轮询微信扫码登录状态。"""
+    try:
+        from backend.modules.channels.wechat import poll_wechat_qr_login
+
+        session_key = str(data.get("session_key", ""))
+        if not session_key:
+            return {"success": False, "status": "expired", "message": "session_key 不能为空"}
+
+        result = await poll_wechat_qr_login(session_key)
+        return result
+    except Exception as e:
+        logger.error(f"Error polling WeChat login: {e}")
+        return {"success": False, "status": "error", "message": f"轮询失败: {e}"}
+
+
+# ============================================================
 # Channel Manager Reload (admin only)
 # ============================================================
 
-async def _restart_channel_manager_if_needed():
-    """热更新渠道管理器"""
-    import asyncio
-    from fastapi import Request
-
-    # 这个函数在 save 操作后被调用，需要获取 app.state
-    # 由于是在异步函数中，我们通过全局变量访问
-    pass  # 实际的 channel manager 重启由 app.py 的 lifespan 管理
+async def _restart_channel_manager_if_needed(fastapi_request: Request):
+    """热更新渠道管理器 — 从 UserChannelConfig 重新加载所有用户的渠道配置。"""
+    await _restart_channel_manager(fastapi_request)
 
 
 async def _restart_channel_manager(fastapi_request: Request) -> Optional[ChannelManager]:
-    """重启渠道管理器"""
+    """重启渠道管理器 — 从 UserChannelConfig 加载配置。
+
+    流程：先初始化新管理器 → 成功后停止旧管理器并切换。
+    这样即使新管理器初始化失败，旧管理器仍在运行（服务不中断）。
+    """
     app_state = fastapi_request.app.state
-    old_manager = getattr(app_state, "channel_manager", None)
-    old_task = getattr(app_state, "channel_manager_task", None)
     message_queue = getattr(app_state, "message_queue", None)
 
     if message_queue is None:
         logger.warning("Skip channel manager reload: message_queue missing")
-        return old_manager
+        return getattr(app_state, "channel_manager", None)
 
+    # 1. 先创建并初始化新管理器
+    manager = ChannelManager(message_queue, db_session_factory=get_db_session_factory())
+    try:
+        await manager.async_init()
+    except Exception as e:
+        logger.error(f"Failed to initialize new channel manager: {e}")
+        return getattr(app_state, "channel_manager", None)
+
+    # 2. 新管理器就绪，停止旧管理器和旧后台任务
+    old_manager = getattr(app_state, "channel_manager", None)
     if old_manager is not None:
-        await old_manager.stop_all()
+        try:
+            await old_manager.stop_all()
+        except Exception as e:
+            logger.error(f"Error stopping old channel manager: {e}")
 
+    old_task = getattr(app_state, "channel_manager_task", None)
     if old_task is not None:
         try:
             await asyncio.wait_for(old_task, timeout=5)
@@ -773,7 +867,7 @@ async def _restart_channel_manager(fastapi_request: Request) -> Optional[Channel
         except asyncio.CancelledError:
             pass
 
-    manager = ChannelManager(config_loader.config, message_queue)
+    # 3. 切换到新管理器
     app_state.channel_manager = manager
     set_channel_manager(manager)
 
@@ -785,7 +879,12 @@ async def _restart_channel_manager(fastapi_request: Request) -> Optional[Channel
     if cron_executor is not None:
         cron_executor.channel_manager = manager
 
-    logger.info(f"Reloaded channel manager with {len(manager.enabled_channels)} channel instance(s)")
+    # 4. 启动新的渠道管理器（start_all 会启动出站调度器和所有已启用的渠道）
+    task = asyncio.create_task(manager.start_all())
+    app_state.channel_manager_task = task
+    app_state.background_tasks.append(task)
+
+    logger.info(f"Reloaded channel manager with {len(manager.channels)} channel instance(s)")
     return manager
 
 
@@ -794,16 +893,20 @@ async def _restart_channel_manager(fastapi_request: Request) -> Optional[Channel
 # ============================================================
 
 @router.get("/status")
-async def get_channels_status():
-    """获取渠道运行状态"""
+async def get_channels_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """获取当前用户的渠道运行状态（用户隔离）。"""
     try:
+        current_user_id = await _get_current_user_id(request, db)
         manager = get_channel_manager()
-        status_data = manager.get_status()
+        status_data = manager.get_status(user_id=current_user_id)
 
         return {
             "success": True,
             "status": status_data,
-            "running": manager.is_running,
+            "running": any(s["running"] for s in status_data.values()),
         }
 
     except Exception as e:

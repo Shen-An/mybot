@@ -55,9 +55,10 @@ export const useChannelsStore = defineStore('channels', () => {
   })
 
   const runningChannels = computed(() => {
-    return Object.entries(status.value)
-      .filter(([_, s]) => s.running)
-      .map(([id, s]) => ({ id, ...s }))
+    // 只统计当前用户已启用且在运行的渠道（防止新用户看到其他用户启用的渠道状态）
+    return Object.entries(channels.value)
+      .filter(([id, channel]) => channel.enabled && status.value[id]?.running)
+      .map(([id]) => ({ id, ...status.value[id] }))
   })
 
   // 方法
@@ -71,22 +72,29 @@ export const useChannelsStore = defineStore('channels', () => {
 
       if (data.success) {
         channels.value = data.channels
-        
-        // 为每个渠道获取完整配置（替换截断的数据）
+
+        // 为每个渠道获取完整配置（替换掩码后的截断数据）
         const channelIds = Object.keys(data.channels)
         await Promise.all(
           channelIds.map(async (channelId) => {
             try {
-              const configResponse = await fetch(`/api/channels/${channelId}/config`)
+              const configResponse = await fetch(`/api/channels/my/${channelId}/config?account_id=default`)
               const configData = await configResponse.json()
-              
+
               if (configData.success && configData.config) {
-                // 用完整配置替换截断的配置
+                // 用完整配置替换掩码后的配置
                 channels.value[channelId].config = configData.config
+
+                // 同时修正 enabled 状态（从数据库读取的真实值）
+                const accountIndex = data.channels[channelId].accounts?.findIndex(
+                  (a: any) => a.account_id === 'default'
+                )
+                if (accountIndex !== undefined && accountIndex >= 0) {
+                  data.channels[channelId].accounts[accountIndex].config = configData.config
+                }
               }
             } catch (e) {
               console.error(`Failed to fetch full config for ${channelId}:`, e)
-              // 保留截断的配置，不影响其他渠道
             }
           })
         )
@@ -145,19 +153,26 @@ export const useChannelsStore = defineStore('channels', () => {
     }
   }
 
-  async function updateChannelConfig(channelId: string, config: Record<string, any>): Promise<boolean> {
+  async function updateChannelConfig(
+    channelId: string,
+    config: Record<string, any>,
+    accountId: string = 'default',
+    isEnabled: boolean = false
+  ): Promise<boolean> {
     loading.value = true
     error.value = null
 
     try {
-      const response = await fetch('/api/channels/update', {
+      const response = await fetch('/api/channels/my/config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           channel: channelId,
-          config
+          account_id: accountId,
+          config,
+          is_enabled: isEnabled
         })
       })
 
@@ -200,13 +215,24 @@ export const useChannelsStore = defineStore('channels', () => {
 
     try {
       // 批量保存所有变更的渠道配置
-      const promises = Object.entries(pendingChanges.value).map(([channelId, config]) => 
-        fetch('/api/channels/update', {
+      const promises = Object.entries(pendingChanges.value).map(([channelId, config]) => {
+        // 从配置中读取 account_id 和 enabled 状态，支持多账号
+        const accountId = String(config.account_id || 'default')
+        const isEnabled = config.enabled === true || (
+          config.accounts && Object.values(config.accounts).some((a: any) => a.enabled === true)
+        )
+
+        return fetch('/api/channels/my/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ channel: channelId, config })
+          body: JSON.stringify({
+            channel: channelId,
+            account_id: accountId,
+            config,
+            is_enabled: isEnabled
+          })
         })
-      )
+      })
 
       const results = await Promise.all(promises)
       const allSuccess = results.every(r => r.ok)
@@ -238,9 +264,9 @@ export const useChannelsStore = defineStore('channels', () => {
     pendingChanges.value = {}
   }
 
-  async function getChannelConfig(channelId: string): Promise<Record<string, any> | null> {
+  async function getChannelConfig(channelId: string, accountId: string = 'default'): Promise<Record<string, any> | null> {
     try {
-      const response = await fetch(`/api/channels/${channelId}/config`)
+      const response = await fetch(`/api/channels/my/${channelId}/config?account_id=${accountId}`)
       const data = await response.json()
 
       if (data.success) {
