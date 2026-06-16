@@ -576,6 +576,84 @@ def _reload_cron_runtime(
         logger.info("Cron runtime reloaded successfully")
 
 
+async def _sync_global_config(
+    req: Request,
+    user_config_updates: Dict[str, Any],
+    loader: Any,
+) -> None:
+    """将用户保存的配置同步到全局 config_loader.config 并持久化到 Setting 表。
+
+    用户通过 Web UI 保存配置时，默认只写入 user_config（user.{user_id}.config.*），
+    但 WebSocket 处理器、ChannelMessageHandler 等都读取全局 config_loader.config，
+    导致用户配置的 provider/model 等变更不生效。
+    此函数将用户配置同步到全局配置，确保所有组件看到最新的配置。
+    """
+    if not user_config_updates:
+        return
+
+    config = loader.config
+    changed = False
+
+    # model 配置（provider, model, temperature 等）
+    model_updates = user_config_updates.get("model")
+    if isinstance(model_updates, dict):
+        for field, value in model_updates.items():
+            if hasattr(config.model, field) and value is not None:
+                setattr(config.model, field, value)
+                changed = True
+
+    # providers 配置（api_key, api_base, enabled 等）
+    providers_updates = user_config_updates.get("providers")
+    if isinstance(providers_updates, dict):
+        for provider_name, provider_data in providers_updates.items():
+            if not isinstance(provider_data, dict):
+                continue
+            if provider_name not in config.providers:
+                config.providers[provider_name] = ProviderConfig()
+            provider_config = config.providers[provider_name]
+            for field, value in provider_data.items():
+                if hasattr(provider_config, field) and value is not None:
+                    setattr(provider_config, field, value)
+                    changed = True
+
+    # workspace 配置
+    workspace_updates = user_config_updates.get("workspace")
+    if isinstance(workspace_updates, dict):
+        for field, value in workspace_updates.items():
+            if hasattr(config.workspace, field) and value is not None:
+                setattr(config.workspace, field, value)
+                changed = True
+
+    # security 配置
+    security_updates = user_config_updates.get("security")
+    if isinstance(security_updates, dict):
+        for field, value in security_updates.items():
+            if hasattr(config.security, field) and value is not None:
+                setattr(config.security, field, value)
+                changed = True
+
+    # persona 配置
+    persona_updates = user_config_updates.get("persona")
+    if isinstance(persona_updates, dict):
+        for field, value in persona_updates.items():
+            if field == "heartbeat":
+                if isinstance(value, dict):
+                    for hb_field, hb_value in value.items():
+                        if hasattr(config.persona.heartbeat, hb_field) and hb_value is not None:
+                            setattr(config.persona.heartbeat, hb_field, hb_value)
+                            changed = True
+            elif hasattr(config.persona, field) and value is not None:
+                setattr(config.persona, field, value)
+                changed = True
+
+    if changed:
+        try:
+            await loader.save()
+            logger.info("全局配置已同步更新")
+        except Exception as e:
+            logger.warning(f"全局配置同步失败（用户配置已保存到 user_config）: {e}")
+
+
 async def _apply_saved_config_runtime(
     req: Request,
     config: AppConfig,
@@ -1065,6 +1143,9 @@ async def update_settings(
         # 保存用户配置
         for section, data in user_config_updates.items():
             await set_user_config(user_id, section, data)
+
+        # 同步更新全局配置，确保 WebSocket 和其他组件读取到最新配置
+        await _sync_global_config(request, user_config_updates, config_loader)
 
         runtime_workspace = validated_workspace_path.resolve() if validated_workspace_path is not None else None
 
