@@ -613,15 +613,13 @@ const handleTimelineScrollTo = (messageId: string) => {
 }
 
 const handleSettingsSaved = () => {
+  // 不再主动关闭 WebSocket 重连：
+  // 后端热重载已同步配置到运行时，现有连接正常工作，下次自动使用新配置。
+  // 仅刷新会话列表（设置可能改了会话元数据）。
   if (chatStore.currentSessionId) {
-    closeConnection()
-    resetInitializedSession()
-    
-    setTimeout(() => {
-      if (chatStore.currentSessionId) {
-        initializeChat(chatStore.currentSessionId, false)  // 重连不清空
-      }
-    }, 500)
+    chatStore.loadSessions().catch((err: any) => {
+      console.warn('[ChatWindow] 刷新会话列表失败:', err)
+    })
   }
 }
 
