@@ -4,8 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "7000:7000"
+    network_mode: "host"
     volumes:
       # SQLite 数据库 + 日志（持久化，容器重建不丢失）
       - ./data:/app/data
@@ -19,12 +18,6 @@ services:
       # - COUNTBOT_SECRET_KEY=your-secret-key-here  # 会话加密密钥
       # - REMOTE_SETUP_SECRET_TTL_MINUTES=30         # 远程设置密钥有效期（分钟）
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7000/docs')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
     # 限制资源（甲骨文 1c6g）
     deploy:
       resources:
