@@ -585,6 +585,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.debug(f"Failed to sync MCP tools to WebSocket: {e}")
 
     from backend.modules.config.loader import config_loader
+    from backend.modules.config.user_config import get_all_user_config
     config = config_loader.config
 
     from backend.modules.providers.runtime import (
@@ -593,9 +594,21 @@ async def websocket_endpoint(websocket: WebSocket):
         get_provider_runtime_state,
     )
 
-    # 根据当前配置创建 provider（支持动态切换）
-    provider_id = config.model.provider
-    runtime_state = get_provider_runtime_state(config, provider_id)
+    # 加载当前用户的 provider/model 配置（每个用户独立）
+    user_config = await get_all_user_config(user_id) if user_id else {}
+    user_providers = user_config.get("providers", {})
+    user_model = user_config.get("model", {})
+
+    # 用户自己的 provider 选择（或 fallback 到全局）
+    provider_id = user_model.get("provider") or config.model.provider
+    user_p = user_providers.get(provider_id, {})
+    runtime_state = get_provider_runtime_state(
+        config,
+        provider_id,
+        api_key_override=user_p.get("api_key"),
+        api_base_override=user_p.get("api_base"),
+        enabled_override=user_p.get("enabled"),
+    )
     if not runtime_state.selectable:
         fallback_state = find_first_selectable_provider(config)
         if fallback_state:
@@ -620,7 +633,7 @@ async def websocket_endpoint(websocket: WebSocket):
         api_key=runtime_state.api_key or None,
         api_keys=runtime_state.api_keys or None,
         api_base=runtime_state.api_base,
-        default_model=config.model.model,
+        default_model=user_model.get("model") or config.model.model,
         api_mode=config.model.api_mode,
         timeout=120.0,
         max_retries=3,
@@ -633,11 +646,11 @@ async def websocket_endpoint(websocket: WebSocket):
         tools=tool_registry,
         context_builder=shared["context_builder"],
         subagent_manager=shared["subagent_manager"],
-        model=config.model.model,
-        max_iterations=config.model.max_iterations,
-        temperature=config.model.temperature,
-        max_tokens=config.model.max_tokens,
-        thinking_enabled=config.model.thinking_enabled,
+        model=user_model.get("model") or config.model.model,
+        max_iterations=user_model.get("max_iterations") or config.model.max_iterations,
+        temperature=user_model.get("temperature") or config.model.temperature,
+        max_tokens=user_model.get("max_tokens") or config.model.max_tokens,
+        thinking_enabled=user_model.get("thinking_enabled", config.model.thinking_enabled),
         user_id=getattr(websocket.app.state, 'user_id', None),
     )
 

@@ -155,6 +155,7 @@ def get_provider_runtime_state(
     *,
     api_key_override: Optional[str] = None,
     api_base_override: Optional[str] = None,
+    enabled_override: Optional[bool] = None,
 ) -> ProviderRuntimeState:
     """计算 provider 是否可被实际请求使用。"""
 
@@ -162,7 +163,11 @@ def get_provider_runtime_state(
     provider_config = app_config.providers.get(provider_id) if app_config else None
     exists = provider_meta is not None
 
-    enabled = bool(provider_config.enabled) if provider_config else False
+    enabled = (
+        enabled_override
+        if enabled_override is not None
+        else (bool(provider_config.enabled) if provider_config else False)
+    )
 
     api_keys = _collect_effective_api_keys(
         provider_config,

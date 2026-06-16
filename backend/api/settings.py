@@ -602,19 +602,8 @@ async def _sync_global_config(
                 setattr(config.model, field, value)
                 changed = True
 
-    # providers 配置（api_key, api_base, enabled 等）
-    providers_updates = user_config_updates.get("providers")
-    if isinstance(providers_updates, dict):
-        for provider_name, provider_data in providers_updates.items():
-            if not isinstance(provider_data, dict):
-                continue
-            if provider_name not in config.providers:
-                config.providers[provider_name] = ProviderConfig()
-            provider_config = config.providers[provider_name]
-            for field, value in provider_data.items():
-                if hasattr(provider_config, field) and value is not None:
-                    setattr(provider_config, field, value)
-                    changed = True
+    # providers 不同步到全局 — 用户自己的 API key 仅存在于 user_config
+    # WebSocket 使用当前用户的 user_config 创建 provider，见 websocket_endpoint
 
     # workspace 配置
     workspace_updates = user_config_updates.get("workspace")
@@ -959,14 +948,24 @@ class TestConnectionResponse(BaseModel):
 async def get_available_providers(
     user_id: int = Depends(get_current_user_id),
 ) -> List[ProviderMetadataResponse]:
-    """获取所有可用的 Provider（全局列表，但用户可有自己的 Provider 配置）"""
+    """获取所有可用的 Provider（全局列表，但每个用户可有自己的 Provider 配置）"""
     from backend.modules.providers.registry import get_all_providers
+    from backend.modules.config.user_config import get_all_user_config
 
     config = config_loader.config
+    user_config = await get_all_user_config(user_id)
+    user_providers = user_config.get("providers", {})
     providers = get_all_providers()
     response: List[ProviderMetadataResponse] = []
     for meta in providers.values():
-        runtime_state = get_provider_runtime_state(config, meta.id)
+        user_p = user_providers.get(meta.id, {})
+        runtime_state = get_provider_runtime_state(
+            config,
+            meta.id,
+            api_key_override=user_p.get("api_key"),
+            api_base_override=user_p.get("api_base"),
+            enabled_override=user_p.get("enabled"),
+        )
         response.append(
             ProviderMetadataResponse(
                 id=meta.id,
@@ -998,23 +997,18 @@ async def get_settings(
         config = config_loader.config
         user_config = await get_all_user_config(user_id)
 
-        # 合并：用户配置覆盖全局配置
+        # provider 配置仅从当前用户的 user_config 读取，不从全局 config.providers 读取
+        # 每个用户只能看到自己配置的 provider，未配置的显示为 enabled=False / api_key=""
+        user_providers = user_config.get("providers", {})
         merged_providers = {}
-        for name, provider_config in config.providers.items():
+        for name in config.providers:
+            user_p = user_providers.get(name, {})
             merged_providers[name] = ProviderConfigResponse(
-                enabled=provider_config.enabled,
-                api_key=provider_config.api_key,
-                api_keys=provider_config.get_effective_api_keys(),
-                api_base=provider_config.api_base,
+                enabled=bool(user_p.get("enabled", False)),
+                api_key=user_p.get("api_key", ""),
+                api_keys=user_p.get("api_keys", []),
+                api_base=user_p.get("api_base", None),
             )
-
-        # 应用用户配置覆盖
-        if "providers" in user_config:
-            for name, overrides in user_config["providers"].items():
-                if name in merged_providers and isinstance(overrides, dict):
-                    for key, value in overrides.items():
-                        if value is not None:
-                            setattr(merged_providers[name], key, value)
 
         # 构建响应
         return SettingsResponse(
@@ -1175,7 +1169,7 @@ async def update_settings(
             config_loader.config,
             workspace_path=runtime_workspace,
             reload_persona=bool(request.persona),
-            reload_provider_model=bool(request.providers or request.model),
+            reload_provider_model=False,  # provider 已用户隔离，不热重载共享运行时
             reload_security=bool(request.security),
             sync_heartbeat=bool(request.persona and "heartbeat" in request.persona),
         )
