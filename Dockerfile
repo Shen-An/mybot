@@ -7,8 +7,6 @@ WORKDIR /app/frontend
 RUN corepack enable
 
 COPY frontend/package.json ./
-# 如果没有 pnpm-lock.yaml 也不报错
-COPY frontend/pnpm-lock.yaml ./ || true
 RUN pnpm install --no-frozen-lockfile
 
 COPY frontend/ .
@@ -18,10 +16,6 @@ RUN pnpm build
 FROM python:3.12-slim
 
 WORKDIR /app
-
-# 安装系统依赖（aiosqlite 等需要）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
 
 # 复制后端源码
 COPY backend/ ./backend/
