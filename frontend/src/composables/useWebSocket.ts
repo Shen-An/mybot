@@ -13,15 +13,37 @@ export interface UseWebSocketOptions {
   onError?: (error: Event) => void
 }
 
+/**
+ * 模块级全局 WS 重连抑制，用于设置保存等场景。
+ * 不依赖组件实例，任何组件都可直接调用。
+ */
+let _globalSuppressReconnect = false
+
+export function suppressWebSocketReconnect() {
+  _globalSuppressReconnect = true
+}
+
+export function restoreWebSocketReconnect() {
+  _globalSuppressReconnect = false
+}
+
+export function isWebSocketReconnectSuppressed(): boolean {
+  return _globalSuppressReconnect
+}
+
 export function useWebSocket() {
   const toast = useToast()
-  
+
   const isConnected = ref(true)
   const isConnecting = ref(false)
   const reconnectAttempts = ref(0)
   const reconnectingVisible = ref(false)
   const reconnectAttemptsDisplay = ref(0)
-  
+
+  /**
+   * 全局 suppress 标志，用于在设置保存等场景暂时禁用 WS 自动重连。
+   */
+  let suppressReconnect = false
   let ws: WebSocket | null = null
   let heartbeatInterval: number | null = null
   let currentConnectedSessionId: string | null = null
@@ -127,6 +149,16 @@ export function useWebSocket() {
   }
   
   // 手动重连
+  function setSuppressReconnect(suppress: boolean) {
+    suppressReconnect = suppress
+    if (!suppress) {
+      // 恢复重连时，重置计数，允许后续重连
+      reconnectAttempts.value = 0
+      reconnectAttemptsDisplay.value = 0
+    }
+  }
+
+  // 手动重连
   function manualReconnect(sessionId: string) {
     if (sessionId) {
       console.log('[useWebSocket] 手动重连')
@@ -213,9 +245,9 @@ export function useWebSocket() {
       isConnected.value = false
       isConnecting.value = false
       stopHeartbeat()
-      
+
       // 网络错误也应该触发重连
-      const sessionToReconnect = currentConnectedSessionId
+      const sessionToReconnect = (suppressReconnect || _globalSuppressReconnect) ? null : currentConnectedSessionId
       if (sessionToReconnect && reconnectAttempts.value < maxReconnectAttempts) {
         reconnectAttempts.value++
         reconnectingVisible.value = true
@@ -239,8 +271,8 @@ export function useWebSocket() {
     ws.onclose = (event) => {
       isConnected.value = false
       isConnecting.value = false
-      
-      const sessionToReconnect = currentConnectedSessionId
+
+      const sessionToReconnect = (suppressReconnect || _globalSuppressReconnect) ? null : currentConnectedSessionId
       currentConnectedSessionId = null
       stopHeartbeat()
       
@@ -318,6 +350,7 @@ export function useWebSocket() {
     sendMessage,
     closeConnection,
     manualReconnect,
+    setSuppressReconnect,
     setHandlers,
     
     // 获取 WebSocket 实例

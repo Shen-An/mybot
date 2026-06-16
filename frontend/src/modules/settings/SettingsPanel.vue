@@ -165,6 +165,10 @@ import { useSettingsStore } from '@/store/settings'
 import { useChannelsStore } from '@/store/channels'
 import { useExternalCodingToolsStore } from '@/store/externalCodingTools'
 import { useToast } from '@/composables/useToast'
+import {
+  suppressWebSocketReconnect,
+  restoreWebSocketReconnect
+} from '@/composables/useWebSocket'
 import type { SettingsTab } from '@/types/settings'
 import { useAuthStore } from '@/store/auth'
 
@@ -238,6 +242,9 @@ const emit = defineEmits<{
 
 const handleSave = async () => {
   try {
+    // 保存设置时抑制 WebSocket 重连，避免后端热重载导致的重连闪烁
+    suppressWebSocketReconnect()
+
     const currentSettings = settingsStore.settings
     if (!currentSettings) {
       toast.error(t('settings.loadError'), t('common.error'))
@@ -338,11 +345,16 @@ const handleSave = async () => {
   } catch (error) {
     console.error('Failed to save settings:', error)
     toast.error(t('settings.saveError'), t('common.error'))
+  } finally {
+    // 恢复 WebSocket 自动重连
+    restoreWebSocketReconnect()
   }
 }
 
 const handleSaveAll = async () => {
   try {
+    suppressWebSocketReconnect()
+
     const currentSettings = settingsStore.settings
     if (!currentSettings) {
       toast.error(t('settings.loadError'), t('common.error'))
@@ -359,6 +371,8 @@ const handleSaveAll = async () => {
   } catch (error) {
     console.error('Failed to save all settings:', error)
     toast.error(t('settings.saveError'), t('common.error'))
+  } finally {
+    restoreWebSocketReconnect()
   }
 }
 

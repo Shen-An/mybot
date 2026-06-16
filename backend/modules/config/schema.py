@@ -32,8 +32,8 @@ class ModelConfig(BaseModel):
     """模型配置"""
     MAX_TOKENS_LIMIT: ClassVar[int] = 2_000_000
 
-    provider: str = "zhipu"
-    model: str = "glm-5"
+    provider: str = ""
+    model: str = ""
     api_mode: Literal["chat_completions"] = Field(
         default="chat_completions",
         description="OpenAI API 模式，固定为 chat.completions",
@@ -369,7 +369,7 @@ class AppConfig(BaseModel):
                     self.providers[provider_id] = ProviderConfig(
                         api_key="",
                         api_base="https://open.bigmodel.cn/api/paas/v4",
-                        enabled=True
+                        enabled=False,
                     )
                 else:
                     self.providers[provider_id] = ProviderConfig(
