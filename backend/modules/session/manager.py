@@ -127,7 +127,8 @@ class SessionManager:
         await self.db.refresh(message)
 
         # 记录流量（仅 user 和 assistant 角色）
-        if user_id and role in ("user", "assistant"):
+        traffic_user_id = user_id or session.user_id
+        if traffic_user_id and role in ("user", "assistant"):
             try:
                 from backend.models.traffic_log import TrafficLog
 
@@ -136,7 +137,7 @@ class SessionManager:
 
                 result = await self.db.execute(
                     select(TrafficLog).where(
-                        TrafficLog.user_id == user_id,
+                        TrafficLog.user_id == traffic_user_id,
                         TrafficLog.date == today,
                     )
                 )
@@ -149,7 +150,7 @@ class SessionManager:
                     log.request_count += 1
                 else:
                     self.db.add(TrafficLog(
-                        user_id=user_id,
+                        user_id=traffic_user_id,
                         date=today,
                         upload_bytes=byte_len if role == "user" else 0,
                         download_bytes=byte_len if role == "assistant" else 0,
