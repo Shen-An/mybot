@@ -117,6 +117,8 @@ def main() -> None:
         open_browser_delayed(f"http://{get_local_client_host(host)}:{port}")
         
         # 启动服务器（生产模式）
+        # forwarded_allow_ips="*" 启用反向代理头支持，部署于 Nginx / 面板时自动
+        # 使用 X-Forwarded-Host / X-Forwarded-Proto 中的域名和协议
         uvicorn.run(
             "backend.app:app",
             host=host,
@@ -124,6 +126,7 @@ def main() -> None:
             reload=False,  # 生产模式禁用热重载
             log_level="info",
             log_config=build_uvicorn_log_config(),
+            forwarded_allow_ips="*",
         )
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
