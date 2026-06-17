@@ -348,7 +348,7 @@ async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends
     # Rehash if needed
     if needs_password_rehash(user.password_hash):
         new_hash = hash_password(data.password)
-        update_user(user.id, password_hash=new_hash, db=db)
+        await update_user(user.id, password_hash=new_hash, db=db)
 
     _clear_auth_failures("login", request, normalized_username)
 
@@ -595,7 +595,7 @@ async def create_new_user(data: CreateUserRequest, request: Request, db: AsyncSe
         return JSONResponse(status_code=400, content={"detail": msg})
 
     hashed = hash_password(data.password)
-    user_id = create_user(
+    user_id = await create_user(
         data.username.strip(), hashed,
         role=data.role,
         display_name=data.display_name or data.username.strip(),
@@ -657,7 +657,7 @@ async def update_existing_user(user_id: int, data: UpdateUserRequest, request: R
             if len(admins) <= 1:
                 return JSONResponse(status_code=400, content={"detail": "不能将最后一个管理员降级"})
 
-    success = update_user(user_id, username=data.username, role=data.role,
+    success = await update_user(user_id, username=data.username, role=data.role,
                           display_name=data.display_name, is_active=data.is_active, db=db)
     if not success:
         return JSONResponse(status_code=404, content={"detail": "用户不存在"})
@@ -680,7 +680,7 @@ async def delete_existing_user(user_id: int, request: Request, db: AsyncSession 
     if user_id == admin.id:
         return JSONResponse(status_code=400, content={"detail": "不能删除自己"})
 
-    success = delete_user(user_id, db)
+    success = await delete_user(user_id, db)
     if not success:
         return JSONResponse(status_code=404, content={"detail": "用户不存在或无法删除"})
 
