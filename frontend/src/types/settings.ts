@@ -41,7 +41,7 @@ export interface Settings {
     fontSize: 'small' | 'medium' | 'large'
 }
 
-export type SettingsTab = 'general' | 'provider' | 'model' | 'persona' | 'memory' | 'workspace' | 'security' | 'channels' | 'mcp' | 'externaltools' | 'multiagent' | 'importexport'
+export type SettingsTab = 'general' | 'provider' | 'model' | 'persona' | 'memory' | 'workspace' | 'security' | 'channels' | 'mcp' | 'externaltools' | 'multiagent' | 'importexport' | 'admin'
 
 export interface HeartbeatConfig {
     enabled: boolean

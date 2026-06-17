@@ -396,6 +396,13 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
             content={"detail": f"注册过于频繁，请 {retry_after} 秒后再试", "code": "RATE_LIMITED"},
         )
 
+    # 检查注册上限（管理员在管理面板设置）
+    from backend.api.admin import check_registration_allowed
+
+    reg_allowed, reg_msg = await check_registration_allowed(db)
+    if not reg_allowed:
+        return JSONResponse(status_code=403, content={"detail": reg_msg, "code": "REGISTRATION_LIMITED"})
+
     normalized_username = data.username.strip()
     valid_username, username_msg = validate_username(normalized_username)
     if not valid_username:

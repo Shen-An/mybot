@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from loguru import logger
+
 from backend.models.message import Message
 from backend.models.session import Session
 
@@ -123,6 +125,40 @@ class SessionManager:
 
         await self.db.commit()
         await self.db.refresh(message)
+
+        # 记录流量（仅 user 和 assistant 角色）
+        if user_id and role in ("user", "assistant"):
+            try:
+                from backend.models.traffic_log import TrafficLog
+
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                byte_len = len(content.encode("utf-8"))
+
+                result = await self.db.execute(
+                    select(TrafficLog).where(
+                        TrafficLog.user_id == user_id,
+                        TrafficLog.date == today,
+                    )
+                )
+                log = result.scalar_one_or_none()
+                if log:
+                    if role == "user":
+                        log.upload_bytes += byte_len
+                    else:
+                        log.download_bytes += byte_len
+                    log.request_count += 1
+                else:
+                    self.db.add(TrafficLog(
+                        user_id=user_id,
+                        date=today,
+                        upload_bytes=byte_len if role == "user" else 0,
+                        download_bytes=byte_len if role == "assistant" else 0,
+                        request_count=1,
+                    ))
+                await self.db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to record traffic log: {e}")
+
         return message
 
     async def get_messages(

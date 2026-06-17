@@ -9,7 +9,8 @@ from backend.models.session import Session
 from backend.models.setting import Setting
 from backend.models.task import Task
 from backend.models.tool_conversation import ToolConversation
+from backend.models.traffic_log import TrafficLog
 from backend.models.user import User
 from backend.models.user_channel_config import UserChannelConfig
 
-__all__ = ["AgentTeam", "Session", "Message", "Setting", "CronJob", "Task", "ToolConversation", "Personality", "User", "AuthSession", "UserChannelConfig"]
+__all__ = ["AgentTeam", "Session", "Message", "Setting", "CronJob", "Task", "ToolConversation", "Personality", "TrafficLog", "User", "AuthSession", "UserChannelConfig"]

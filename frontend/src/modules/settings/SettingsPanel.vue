@@ -89,6 +89,8 @@
 
           <MultiAgentConfig v-else-if="activeTab === 'multiagent'" />
 
+          <AdminPanel v-else-if="activeTab === 'admin'" />
+
           <ConfigImportExport v-else-if="activeTab === 'importexport'" />
         </div>
       </div>
@@ -161,6 +163,7 @@ import ConfigImportExport from './ConfigImportExport.vue'
 import GeneralConfig from './GeneralConfig.vue'
 import MemoryPanel from '@/modules/memory/MemoryPanel.vue'
 import UserManagement from './UserManagement.vue'
+import AdminPanel from './AdminPanel.vue'
 import { useSettingsStore } from '@/store/settings'
 import { useChannelsStore } from '@/store/channels'
 import { useExternalCodingToolsStore } from '@/store/externalCodingTools'
@@ -213,7 +216,8 @@ const tabs = [
   { id: 'mcp' as SettingsTab, icon: CpuIcon, label: 'settings.tabs.mcp', shortLabel: 'settings.tabShort.mcp' },
   { id: 'externaltools' as SettingsTab, icon: TerminalSquareIcon, label: 'settings.tabs.externaltools', shortLabel: 'settings.tabShort.externaltools' },
   { id: 'multiagent' as SettingsTab, icon: NetworkIcon, label: 'settings.tabs.multiagent', shortLabel: 'settings.tabShort.multiagent' },
-  { id: 'importexport' as SettingsTab, icon: DownloadIcon, label: 'settings.importExport.title', shortLabel: 'settings.importExport.title' }
+  { id: 'importexport' as SettingsTab, icon: DownloadIcon, label: 'settings.importExport.title', shortLabel: 'settings.importExport.title' },
+  { id: 'admin' as SettingsTab, icon: ShieldIcon, label: '管理面板', shortLabel: '管理', hidden: !authStore.isAdmin },
 ]
 
 const footerSaveHint = computed(() => {
@@ -229,7 +233,7 @@ const footerSaveHint = computed(() => {
   if (activeTab.value === 'externaltools') {
     return t('settings.footer.externalTools')
   }
-  if (activeTab.value === 'multiagent' || activeTab.value === 'importexport') {
+  if (activeTab.value === 'multiagent' || activeTab.value === 'importexport' || activeTab.value === 'admin') {
     return t('settings.footer.noSave')
   }
   return t('settings.saveHint')
@@ -331,7 +335,12 @@ const handleSave = async () => {
         // 配置管理页面不需要保存
         toast.info('配置管理页面无需保存', '提示')
         return
-        
+
+      case 'admin':
+        // 管理面板各自有独立保存按钮
+        toast.info('管理面板已独立保存', '提示')
+        return
+
       default:
         // 默认保存所有
         savePayload = { ...currentSettings }

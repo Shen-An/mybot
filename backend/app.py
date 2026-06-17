@@ -467,6 +467,7 @@ from backend.api.personalities import router as personalities_router
 from backend.api.agent_teams import router as agent_teams_router
 from backend.api.mcp import router as mcp_router
 from backend.api.wiki import router as wiki_router
+from backend.api.admin import router as admin_router
 
 app.include_router(auth_router)
 app.include_router(chat_router)
@@ -483,6 +484,7 @@ app.include_router(personalities_router)
 app.include_router(agent_teams_router)
 app.include_router(mcp_router)
 app.include_router(wiki_router)
+app.include_router(admin_router)
 
 
 # WebSocket 端点

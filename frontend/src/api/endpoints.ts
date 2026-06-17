@@ -1131,3 +1131,81 @@ export const configAPI = {
     import: (data: ImportConfigRequest): Promise<ImportConfigResponse> =>
         apiClient.post('/settings/import', data),
 }
+
+
+/**
+ * Admin API — 管理面板（仅管理员）
+ */
+export const adminAPI = {
+    /**
+     * 获取消息列表（分页）
+     */
+    getMessages: (params: {
+        user_id?: number
+        limit?: number
+        offset?: number
+    }): Promise<{
+        total: number
+        messages: Array<{
+            id: number
+            session_id: string
+            role: string
+            content: string
+            created_at: string
+            user_id: number
+            username: string
+        }>
+        limit: number
+        offset: number
+    }> => apiClient.get('/admin/messages', { params }),
+
+    /**
+     * 获取流量统计
+     */
+    getTraffic: (params: {
+        user_id?: number
+        days?: number
+    }): Promise<{
+        totals: { upload_bytes: number; download_bytes: number; total_bytes: number; request_count: number }
+        by_user: Array<{
+            user_id: number
+            username: string
+            upload_bytes: number
+            download_bytes: number
+            total_bytes: number
+            request_count: number
+        }>
+        daily: Array<{
+            date: string
+            upload_bytes: number
+            download_bytes: number
+            total_bytes: number
+            request_count: number
+        }>
+    }> => apiClient.get('/admin/traffic', { params }),
+
+    /**
+     * 获取用户统计
+     */
+    getUserCount: (): Promise<{
+        total_users: number
+        active_users: number
+    }> => apiClient.get('/admin/users/count'),
+
+    /**
+     * 读取管理设置
+     */
+    getSettings: (): Promise<{
+        max_users: number
+    }> => apiClient.get('/admin/settings'),
+
+    /**
+     * 保存管理设置
+     */
+    saveSettings: (data: {
+        max_users: number
+    }): Promise<{
+        success: boolean
+        max_users: number
+    }> => apiClient.post('/admin/settings', data),
+}
