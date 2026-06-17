@@ -590,7 +590,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
     from backend.modules.providers.runtime import (
         build_provider_unavailable_message,
-        find_first_selectable_provider,
         get_provider_runtime_state,
     )
 
@@ -599,8 +598,20 @@ async def websocket_endpoint(websocket: WebSocket):
     user_providers = user_config.get("providers", {})
     user_model = user_config.get("model", {})
 
-    # 用户自己的 provider 选择（或 fallback 到全局）
-    provider_id = user_model.get("provider") or config.model.provider
+    # 只使用用户自己的 provider 选择 — 不 fallback 到全局 config，
+    # 防止管理员 provider 泄露给其他用户。
+    user_provider_id = user_model.get("provider")
+    if not user_provider_id:
+        await websocket.close(
+            code=1011,
+            reason=(
+                "请在设置页配置 AI 提供商后再试。"
+                "Configure an AI provider in Settings before chatting."
+            ),
+        )
+        return
+
+    provider_id = user_provider_id
     user_p = user_providers.get(provider_id, {})
     runtime_state = get_provider_runtime_state(
         config,
@@ -610,24 +621,16 @@ async def websocket_endpoint(websocket: WebSocket):
         enabled_override=user_p.get("enabled"),
     )
     if not runtime_state.selectable:
-        fallback_state = find_first_selectable_provider(config)
-        if fallback_state:
-            logger.warning(
-                f"WebSocket 默认 provider '{provider_id}' 不可用（{runtime_state.reason}），"
-                f"已回退到 '{fallback_state.provider_id}'"
-            )
-            runtime_state = fallback_state
-            provider_id = fallback_state.provider_id
-        else:
-            await websocket.close(
-                code=1011,
-                reason=build_provider_unavailable_message(
-                    provider_id,
-                    runtime_state.reason,
-                    compact=True,
-                ),
-            )
-            return
+        # 不 fallback 到全局 provider — 用户隔离
+        await websocket.close(
+            code=1011,
+            reason=build_provider_unavailable_message(
+                provider_id,
+                runtime_state.reason,
+                compact=True,
+            ),
+        )
+        return
 
     provider = create_provider(
         api_key=runtime_state.api_key or None,
