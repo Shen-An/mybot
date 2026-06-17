@@ -540,12 +540,36 @@ def _auth_required_response() -> JSONResponse:
 # User Management APIs (admin only)
 # ============================================================
 
+AUTH_COOKIE_NAME = "CountBot_token"
+
+
+async def _get_current_user_from_request(request: Request, db):
+    """从请求中提取并验证当前用户。
+    由于 RemoteAuthMiddleware 对 /api/auth/* 路径跳过认证，
+    用户管理端点需要自己从 cookie/header 恢复用户。
+    """
+    from backend.modules.auth.utils import get_user_by_id, validate_auth_session
+
+    token = request.cookies.get(AUTH_COOKIE_NAME)
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        return None
+    user_id = await validate_auth_session(token, db)
+    if user_id is None:
+        return None
+    user = await get_user_by_id(user_id, db)
+    return user if user and user.is_active else None
+
+
 @router.post("/users")
 async def create_new_user(data: CreateUserRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Create a new user — admin only."""
 
     try:
-        admin = getattr(request.state, "user", None)
+        admin = await _get_current_user_from_request(request, db)
         if admin is None or admin.role != "admin":
             return JSONResponse(status_code=403, content={"detail": "需要管理员权限", "code": "ADMIN_REQUIRED"})
     except HTTPException:
@@ -591,7 +615,7 @@ async def list_all_users(request: Request, db: AsyncSession = Depends(get_db)):
     """List all users — admin or operator only."""
 
     try:
-        current_user = getattr(request.state, "user", None)
+        current_user = await _get_current_user_from_request(request, db)
         if current_user is None or current_user.role not in ("admin", "operator"):
             return JSONResponse(status_code=403, content={"detail": "需要管理员或操作员权限", "code": "ADMIN_OR_OPERATOR_REQUIRED"})
     except HTTPException:
@@ -618,7 +642,7 @@ async def update_existing_user(user_id: int, data: UpdateUserRequest, request: R
     """Update a user — admin only."""
 
     try:
-        admin = getattr(request.state, "user", None)
+        admin = await _get_current_user_from_request(request, db)
         if admin is None or admin.role != "admin":
             return JSONResponse(status_code=403, content={"detail": "需要管理员权限", "code": "ADMIN_REQUIRED"})
     except HTTPException:
@@ -646,7 +670,7 @@ async def delete_existing_user(user_id: int, request: Request, db: AsyncSession 
     """Delete a user — admin only."""
 
     try:
-        admin = getattr(request.state, "user", None)
+        admin = await _get_current_user_from_request(request, db)
         if admin is None or admin.role != "admin":
             return JSONResponse(status_code=403, content={"detail": "需要管理员权限", "code": "ADMIN_REQUIRED"})
     except HTTPException:
