@@ -136,7 +136,7 @@ async function loadUsers() {
   try {
     users.value = await authAPI.listUsers()
   } catch (e: any) {
-    toast({ title: '加载失败', description: e.response?.data?.detail || '未知错误', variant: 'destructive' })
+    toast.error('加载失败: ' + (e.response?.data?.detail || '未知错误'))
   }
 }
 
@@ -167,7 +167,7 @@ async function saveUser() {
         role: form.value.role !== editingUser.value.role ? form.value.role : undefined,
         is_active: form.value.is_active !== editingUser.value.is_active ? form.value.is_active : undefined,
       })
-      toast({ title: '更新成功' })
+      toast.success('更新成功')
     } else {
       await authAPI.createUser({
         username: form.value.username,
@@ -175,12 +175,12 @@ async function saveUser() {
         display_name: form.value.display_name || undefined,
         role: form.value.role,
       })
-      toast({ title: '创建成功' })
+      toast.success('创建成功')
     }
     closeDialog()
     await loadUsers()
   } catch (e: any) {
-    toast({ title: '操作失败', description: e.response?.data?.detail || '未知错误', variant: 'destructive' })
+    toast.error('操作失败: ' + (e.response?.data?.detail || '未知错误'))
   } finally {
     saving.value = false
   }
@@ -190,10 +190,10 @@ async function deleteUser(id: number) {
   if (!confirm('确定要删除此用户吗？此操作不可恢复。')) return
   try {
     await authAPI.deleteUser(id)
-    toast({ title: '删除成功' })
+    toast.success('删除成功')
     await loadUsers()
   } catch (e: any) {
-    toast({ title: '删除失败', description: e.response?.data?.detail || '未知错误', variant: 'destructive' })
+    toast.error('删除失败: ' + (e.response?.data?.detail || '未知错误'))
   }
 }
 
