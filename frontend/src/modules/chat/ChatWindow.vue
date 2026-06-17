@@ -623,7 +623,9 @@ const handleSettingsSaved = () => {
   // 如果 WebSocket 已断开（例如新用户首次配置 provider 前连接失败），
   // 保存设置后主动触发重连。如果连接正常则不动（避免不必要的断连）。
   if (!isConnected.value && chatStore.currentSessionId) {
-    manualReconnect(chatStore.currentSessionId)
+    console.log('[ChatWindow] 设置已保存，WS 处于断开状态，触发手动重连')
+    // 直接 connectWebSocket（绕过 manualReconnect 的健康检查步骤）
+    connectWebSocket(chatStore.currentSessionId)
   }
 }
 
