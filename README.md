@@ -70,6 +70,31 @@
 - **PyInstaller hidden-import 补全**：修复编译版缺失模块问题
 - **Wiki 模块依赖修复**：修复编译版 Wiki 500 报错
 
+### 🔒 安全加固
+
+- **Provider 配置用户完全隔离**：每位用户的 API Key 仅存于各自 `user_config`，互不可见。`_sync_global_config` 不再同步 `providers` 到全局配置
+- **新用户必须自行配置 AI 提供商**：WebSocket 端点不再 fallback 到管理员配置的全局 provider，新用户未配置时无法使用
+- **Auth 管理端点 missing await 修复**：`delete_user` / `create_user` / `update_user` 均为 async 函数但遗漏 `await`，导致增删改实际未执行
+- **用户管理接口 403 修复**：`RemoteAuthMiddleware` 将 `/api/auth/*` 视为公开路径导致 `request.state.user` 始终为 None，新增 `_get_current_user_from_request()` 自行验证会话
+
+### 🛡️ 管理面板
+
+- **新增管理面板**（设置页 → 管理面板，仅管理员可见）：
+  - **注册限制**：设置最大用户数，超限时禁止新用户注册
+  - **聊天记录查看**：按用户筛选、关键词搜索、分页浏览所有用户消息
+  - **流量监控**：统计每个用户的上传/下载字节数，支持按时间范围筛选，可直接删除恶意用户
+- **TrafficLog 模型**：按日按用户记录流量，消息保存时自动写入
+
+### 🌐 反向代理部署支持
+
+- **Uvicorn `forwarded_allow_ips="*"`**：支持 Nginx/面板反向代理，正确识别 `X-Forwarded-Host` / `X-Forwarded-Proto`
+
+### 🔧 WebSocket 稳定性优化
+
+- **保存设置不再主动断连**：后端热重载已同步配置到运行时，无需断开 WebSocket 重建
+- **重连抑制机制**：设置保存期间自动抑制 WebSocket 重连，避免热重载导致重连闪烁
+- **新用户配置后自动重连**：首次配置 provider 后，WS 断开状态下自动触发重连
+
 ---
 
 ## CountBot 是什么

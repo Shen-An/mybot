@@ -70,6 +70,31 @@ This project is a **fork** of [CountBot](https://github.com/countbot-ai/CountBot
 - **PyInstaller hidden-imports completed**: Fixed missing modules in compiled builds
 - **Wiki module dependency fixes**: Fixed 500 errors in compiled Wiki builds
 
+### 🔒 Security Hardening
+
+- **Full provider isolation**: Each user's API keys exist only in their own `user_config`, invisible to others. `_sync_global_config` no longer syncs `providers` to the global config
+- **New users must configure their own AI provider**: WebSocket endpoint no longer falls back to the admin's provider — new users without their own config cannot chat
+- **Fixed missing `await` in auth admin endpoints**: `delete_user` / `create_user` / `update_user` are async functions but were called without `await`, causing CRUD operations to silently fail
+- **Fixed 403 on user management API**: `RemoteAuthMiddleware` treated `/api/auth/*` as public paths, leaving `request.state.user` as `None`. Added `_get_current_user_from_request()` for self-validated session auth
+
+### 🛡️ Admin Panel
+
+- **New Admin Panel** (Settings → Admin tab, admin-only):
+  - **Registration limit**: Set max users count, block new registrations when limit is reached
+  - **Chat log viewer**: Filter by user, keyword search, paginated browsing of all user messages
+  - **Traffic monitoring**: Per-user upload/download byte statistics, time-range filtering, direct user deletion for malicious activity
+- **TrafficLog model**: Daily per-user traffic recording, auto-populated when messages are saved
+
+### 🌐 Reverse Proxy Support
+
+- **Uvicorn `forwarded_allow_ips="*"`**: Properly handles `X-Forwarded-Host` / `X-Forwarded-Proto` headers behind Nginx or server panels
+
+### 🔧 WebSocket Stability
+
+- **No forced reconnection on settings save**: Backend hot-reload syncs config at runtime — no need to disconnect WebSocket
+- **Reconnection suppression**: Auto-suppresses WebSocket reconnection during settings saves to avoid flickering
+- **Auto-reconnect after provider config**: Triggers reconnection when a new user saves their provider config while WS is disconnected
+
 ---
 
 ## What Is CountBot
