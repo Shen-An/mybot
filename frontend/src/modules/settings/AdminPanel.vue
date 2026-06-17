@@ -50,7 +50,14 @@
       <div class="card-header">
         <h3>聊天记录</h3>
         <div class="filter-row">
-          <select v-model.number="msgUserFilter" class="admin-select" @change="loadMessages">
+          <input
+            v-model="msgKeyword"
+            type="text"
+            class="admin-input search-input"
+            placeholder="搜索关键词..."
+            @keyup.enter="msgOffset = 0; loadMessages()"
+          />
+          <select v-model.number="msgUserFilter" class="admin-select" @change="msgOffset = 0; loadMessages()">
             <option :value="0">全部用户</option>
             <option v-for="u in userList" :key="u.id" :value="u.id">
               {{ u.username }}
@@ -62,7 +69,7 @@
             <option :value="100">100 条</option>
             <option :value="200">200 条</option>
           </select>
-          <button class="btn-refresh" @click="loadMessages">刷新</button>
+          <button class="btn-refresh" @click="msgOffset = 0; loadMessages()">搜索</button>
         </div>
       </div>
       <div class="card-body">
@@ -153,7 +160,7 @@
                   <button
                     class="btn-text text-danger"
                     :disabled="deletingUserId === u.user_id"
-                    @click="handleDeleteUser(u.user_id, u.username)"
+                    @click="showDeleteConfirm(u.user_id, u.username)"
                   >
                     {{ deletingUserId === u.user_id ? '删除中...' : '删除' }}
                   </button>
@@ -164,6 +171,25 @@
         </div>
       </div>
     </section>
+
+    <!-- 确认删除弹窗 -->
+    <div v-if="deleteTarget" class="modal-overlay" @click.self="deleteTarget = null">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h4>确认删除</h4>
+        </div>
+        <div class="modal-body">
+          <p>确定要删除用户 <strong>{{ deleteTarget.username }}</strong> 吗？</p>
+          <p class="text-danger">此操作不可恢复，该用户的所有数据将被清除。</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="deleteTarget = null">取消</button>
+          <button class="btn-danger" :disabled="deletingUserId !== null" @click="confirmDeleteUser">
+            {{ deletingUserId !== null ? '删除中...' : '确认删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -225,6 +251,7 @@ const msgTotal = ref(0)
 const msgOffset = ref(0)
 const msgLimit = ref(50)
 const msgUserFilter = ref(0) // 0 = all
+const msgKeyword = ref('')
 const loadingMessages = ref(false)
 const userList = ref<Array<{ id: number; username: string }>>([])
 
@@ -234,11 +261,15 @@ const totalPages = computed(() => Math.max(1, Math.ceil(msgTotal.value / msgLimi
 async function loadMessages() {
   loadingMessages.value = true
   try {
-    const res = await adminAPI.getMessages({
+    const params: any = {
       user_id: msgUserFilter.value > 0 ? msgUserFilter.value : undefined,
       limit: msgLimit.value,
       offset: msgOffset.value,
-    })
+    }
+    if (msgKeyword.value.trim()) {
+      params.keyword = msgKeyword.value.trim()
+    }
+    const res = await adminAPI.getMessages(params)
     messages.value = res.messages
     msgTotal.value = res.total
   } catch (e: any) {
@@ -273,6 +304,27 @@ const trafficUserFilter = ref(0)
 const trafficDays = ref(7)
 const loadingTraffic = ref(false)
 const deletingUserId = ref<number | null>(null)
+const deleteTarget = ref<{ user_id: number; username: string } | null>(null)
+
+function showDeleteConfirm(userId: number, username: string) {
+  deleteTarget.value = { user_id: userId, username }
+}
+
+async function confirmDeleteUser() {
+  if (!deleteTarget.value) return
+  const t = deleteTarget.value
+  deleteTarget.value = null
+  deletingUserId.value = t.user_id
+  try {
+    await authAPI.deleteUser(t.user_id)
+    toast.success('用户已删除')
+    await Promise.all([loadTraffic(), loadSettings()])
+  } catch (e: any) {
+    toast.error('删除失败: ' + (e.response?.data?.detail || '未知错误'))
+  } finally {
+    deletingUserId.value = null
+  }
+}
 
 async function loadTraffic() {
   loadingTraffic.value = true
@@ -292,7 +344,7 @@ async function loadTraffic() {
 }
 
 async function handleDeleteUser(userId: number, username: string) {
-  if (!confirm(`确定要删除用户「${username}」吗？此操作不可恢复。`)) return
+  if (!confirm('确定要删除用户 ' + username + ' 吗？此操作不可恢复。')) return
   deletingUserId.value = userId
   try {
     await authAPI.deleteUser(userId)
@@ -479,6 +531,10 @@ onMounted(async () => {
   align-items: center;
 }
 
+.search-input {
+  min-width: 140px;
+}
+
 .loading, .empty {
   padding: 32px;
   text-align: center;
@@ -639,5 +695,71 @@ onMounted(async () => {
   background: var(--bg-primary, #0f172a);
   border-color: var(--border-color, #334155);
   color: var(--text-primary, #f1f5f9);
+}
+
+/* 确认弹窗 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-box {
+  background: var(--bg-primary, #fff);
+  border-radius: 8px;
+  padding: 0;
+  min-width: 360px;
+  max-width: 440px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+.modal-header {
+  padding: 16px 20px 0;
+}
+
+.modal-header h4 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.modal-body {
+  padding: 12px 20px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 16px;
+}
+
+.btn-cancel {
+  padding: 6px 16px;
+  background: var(--bg-tertiary, #f1f5f9);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-danger {
+  padding: 6px 16px;
+  background: #ef4444;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

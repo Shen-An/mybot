@@ -1144,6 +1144,7 @@ export const adminAPI = {
         user_id?: number
         limit?: number
         offset?: number
+        keyword?: string
     }): Promise<{
         total: number
         messages: Array<{

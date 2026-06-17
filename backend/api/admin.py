@@ -53,6 +53,7 @@ async def get_admin_messages(
     request: Request,
     db: AsyncSession = Depends(get_db),
     user_id: Optional[int] = Query(None, description="筛选用户 ID"),
+    keyword: Optional[str] = Query(None, description="搜索关键词"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
@@ -82,6 +83,11 @@ async def get_admin_messages(
     if user_id is not None and user_id > 0:
         base_query = base_query.where(Session.user_id == user_id)
         count_query = count_query.where(Session.user_id == user_id)
+
+    if keyword:
+        kw = f"%{keyword}%"
+        base_query = base_query.where(Message.content.like(kw))
+        count_query = count_query.where(Message.content.like(kw))
 
     total = (await db.execute(count_query)).scalar() or 0
 
